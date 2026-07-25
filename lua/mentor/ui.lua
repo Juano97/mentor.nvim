@@ -245,6 +245,12 @@ function M.toggle(cfg)
     M.close()
   else
     M.open(cfg)
+    -- Opening the panel by hand means you want to ask something, so land in the
+    -- input box ready to type. `open` itself stays where it was on purpose: the
+    -- streaming path opens the panel while you are still in your code.
+    if cfg.focus_on_open ~= false then
+      M.focus_input(cfg)
+    end
   end
 end
 

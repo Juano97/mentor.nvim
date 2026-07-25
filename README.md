@@ -45,7 +45,7 @@ Then `:checkhealth mentor` to confirm the backend and the sandbox settings.
 
 | Command | Default map | What it does |
 |---|---|---|
-| `:Mentor` | `<leader>mm` | Toggle the panel (right split, ~20% wide) |
+| `:Mentor` | `<leader>mm` | Toggle the panel (right split, ~20% wide); opens straight into the input box |
 | `:MentorAsk [text]` | `<leader>ma` | Ask a question; prompts if you give no text |
 | `:MentorReview` | `<leader>mr` | Review your most recent changes |
 | `:MentorStop` | `<leader>ms` | Cancel the answer in flight |
@@ -143,7 +143,8 @@ Defaults live in `lua/mentor/config.lua`. Common changes:
 
 ```lua
 require("mentor").setup({
-  window = { width = 0.25, input_height = 5 },
+  -- focus_on_open=false makes :Mentor only reveal the panel, cursor unmoved.
+  window = { width = 0.25, input_height = 5, focus_on_open = true },
 
   -- Let it read the codebase but nothing else. Set `tools = {}` for pure chat.
   claude_cli = {

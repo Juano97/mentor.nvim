@@ -69,4 +69,27 @@ session.ask = real_ask
 ui.close()
 h.check("close tears down both windows", not ui.win_valid() and not ui.input_win_valid())
 
+---------------------------------------------------------------- toggle focus
+
+-- Opening by hand should leave you ready to type, unlike the streaming path.
+local code_win = vim.api.nvim_get_current_win()
+ui.toggle(cfg.window)
+vim.cmd("stopinsert")
+h.check("toggle opens into the input box",
+  vim.api.nvim_get_current_win() == ui.state.input_win)
+
+ui.toggle(cfg.window)
+h.check("toggle closes again", not ui.win_valid())
+
+ui.toggle(vim.tbl_extend("force", cfg.window, { focus_on_open = false }))
+h.check("focus_on_open=false leaves the cursor put",
+  vim.api.nvim_get_current_win() == code_win)
+ui.close()
+
+-- The streaming path must never yank the cursor out of the code buffer.
+ui.open(cfg.window)
+h.check("open on its own does not steal focus",
+  vim.api.nvim_get_current_win() == code_win)
+ui.close()
+
 h.cleanup(dir)

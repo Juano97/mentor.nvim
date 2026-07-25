@@ -11,6 +11,9 @@ M.defaults = {
     position = "right", -- "right" | "left"
     wrap = true,
     input_height = 5, -- lines in the input box below the transcript
+    -- Toggling the panel open puts the cursor in the input box and starts
+    -- insert. Set false to have :Mentor only reveal the panel.
+    focus_on_open = true,
   },
 
   ---------------------------------------------------------------------------

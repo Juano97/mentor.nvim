@@ -1,0 +1,59 @@
+if vim.g.loaded_mentor then
+  return
+end
+vim.g.loaded_mentor = true
+
+if vim.fn.has("nvim-0.10") == 0 then
+  vim.notify("[mentor] requires Neovim 0.10+ (vim.system)", vim.log.levels.ERROR)
+  return
+end
+
+local function cmd(name, fn, opts)
+  vim.api.nvim_create_user_command(name, fn, opts or {})
+end
+
+cmd("Mentor", function()
+  require("mentor").toggle()
+end, { desc = "Toggle the mentor panel" })
+
+cmd("MentorAsk", function(a)
+  local mentor = require("mentor")
+  local question = a.args ~= "" and a.args or nil
+  if a.range > 0 then
+    -- :'<,'>MentorAsk  /  :10,20MentorAsk why is this slow?
+    mentor.ask_range(a.line1, a.line2, question)
+  else
+    mentor.ask(question)
+  end
+end, { nargs = "*", range = true, desc = "Ask the mentor a question" })
+
+cmd("MentorReview", function()
+  require("mentor").review()
+end, { desc = "Review the most recent changes" })
+
+cmd("MentorStop", function()
+  require("mentor").stop()
+end, { desc = "Cancel the answer in flight" })
+
+cmd("MentorReset", function()
+  require("mentor").reset()
+end, { desc = "Clear the conversation and the panel" })
+
+cmd("MentorTodos", function(a)
+  local arg = a.args
+  local enable = nil
+  if arg == "on" then
+    enable = true
+  elseif arg == "off" then
+    enable = false
+  end
+  require("mentor").toggle_todos(enable)
+end, {
+  nargs = "?",
+  complete = function() return { "on", "off" } end,
+  desc = "Toggle learning-mode TODO(human) items",
+})
+
+cmd("MentorTodoInsert", function()
+  require("mentor").insert_todos()
+end, { desc = "Insert the latest TODO(human) items as comments" })

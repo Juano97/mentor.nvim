@@ -1,0 +1,108 @@
+# mentor.nvim
+
+A read-only AI tutor in a Neovim side panel. It answers questions about the
+project and reviews recent changes. It cannot edit files, run commands, or
+install anything — that is the product, not a nice-to-have.
+
+`README.md` covers usage and configuration. This file covers the invariants and
+the things that will bite you.
+
+## The one invariant
+
+**The plugin must never gain write capability.** Enforcement is layered, and the
+layers are deliberately not conflated:
+
+- **Hard (capability).** `lua/mentor/provider/claude_cli.lua:19` builds the
+  argv: `--tools` allowlists Read/Grep/Glob, `--disallowedTools` names the write
+  tools, `--strict-mcp-config` and `--setting-sources ""` stop ambient MCP
+  servers and user settings widening the sandbox. The `openai_compat` backend
+  sends no tools at all.
+- **Soft (pedagogy).** `lua/mentor/prompts.lua` stops it handing over finished
+  implementations.
+
+**Never move a guarantee from the hard layer to the soft one.** If a change
+would make the sandbox depend on prompt wording, it is the wrong change.
+`prompts.lua` is the file to iterate on freely; the argv builder is not.
+
+`tests/wiring_spec.lua` asserts the flags, including that Edit/Write/Bash are
+denied. If you touch `build_args`, that spec is the thing that must stay green.
+
+## Layout
+
+| File | Role |
+|---|---|
+| `plugin/mentor.lua` | User commands; guards on `nvim-0.10` and `vim.g.loaded_mentor` |
+| `lua/mentor/init.lua` | `setup()`, keymaps; thin delegation to `session` |
+| `lua/mentor/session.lua` | Orchestration: builds a prompt, drives the provider, owns busy state |
+| `lua/mentor/ui.lua` | The panel — transcript window + input window, winbar, spinner |
+| `lua/mentor/context.lua` | What the user is looking at: code buffer, cursor, selection, git diff |
+| `lua/mentor/prompts.lua` | System prompt and request wrappers |
+| `lua/mentor/todo.lua` | Parses `TODO(human)` items and inserts them as comments |
+| `lua/mentor/provider/` | `claude_cli` (default) and `openai_compat`, behind `resolve()` |
+
+## Invariants worth knowing
+
+**`ui.open()` is focus-neutral; `ui.toggle()` focuses.** `open()` restores the
+previous window on purpose (`ui.lua:227`). Two things depend on it: `send()`
+opens the panel while the user is still in their code buffer, so `:MentorReview`
+must not yank the cursor away mid-stream; and `follow()` only auto-scrolls when
+the panel is *not* the current window, so it never steals the cursor from
+someone reading. Focus behaviour belongs in `toggle()`/`focus_input()`, never in
+`open()`.
+
+**Context follows the last code buffer, not the current one.** Once the panel
+has an input box, the cursor is *in the panel* when a question is sent. So
+`context.code_buf()` falls back to `last_code_buf`, tracked by a `BufEnter`/
+`WinEnter` autocmd, and `mentor://` buffers are excluded. Anything that reads
+"where is the user working" must go through `code_buf()`.
+
+**The transcript buffer is `modifiable = false` at rest.** `append()` flips it
+on and back off. Never leave it writable.
+
+**The model never authors inserted text.** For `TODO(human)`, it emits a path, a
+line and a sentence; `todo.lua` builds the comment from the target buffer's
+`commentstring`. Inserting model-written *code* would break the guarantee even
+though no tool was involved. Markers go in bottom-up so earlier insertions do
+not shift later line numbers.
+
+**`commentstring` needs coaxing.** `bufadd()` + `bufload()` loads a file without
+running filetype detection, so `commentstring` is empty for any file not already
+open. `todo.commentstring()` forces `filetype detect`, then falls back to a
+lookup table — guessing `#` would write a Python comment into a Lua file.
+`tests/commentstring_spec.lua` covers this.
+
+**Provider contract.** `chat(o)` takes `{ prompt, system, state, cfg, cwd,
+on_delta, on_error, on_done }` and returns a handle with `:kill()`. `on_done`
+fires exactly once, including on failure. `o.state` is the provider's to mutate
+(CLI session id, or HTTP message history) and is cleared when the backend
+changes. The prompt goes over **stdin**, not argv — large diffs would hit
+ARG_MAX. Exit code 143 is SIGTERM from `:MentorStop` and is not an error.
+
+## Tests
+
+```sh
+make test                              # offline suite; live spec self-skips
+make test-one SPEC=tests/ui_spec.lua   # one spec
+make test-e2e                          # hits the real backend, spends quota
+```
+
+Homegrown harness (`tests/harness.lua`), no plenary. One nvim process per spec
+via `tests/minimal_init.lua`, so specs cannot leak window, config or provider
+state into each other. `h.fixture()` builds a throwaway git repo with a real
+diff; `h.stub_provider()` swaps in a recording provider.
+
+Assertions are `h.check(label, ok, extra)` and `h.eq(label, got, want)`.
+
+Insert mode is not assertable headlessly — `startinsert` sets a flag the main
+loop consumes on re-entering normal mode, and a headless script exits first.
+Test the window focus and leave insert mode to manual checking.
+
+## Conventions
+
+- Comments explain *why*, not what. Several of the invariants above exist as
+  comments at their site; keep them there if you move the code.
+- LuaCATS annotations (`---@param`, `---@return`) on anything public.
+- No dependencies. Neovim 0.10+ (`vim.system`, `vim.uv`).
+- Every user-facing default lives in `lua/mentor/config.lua` with a comment.
+  New behaviour that someone might want off gets a config key, guarded as
+  `cfg.thing ~= false` so existing configs keep working.

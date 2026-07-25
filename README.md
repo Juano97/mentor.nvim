@@ -36,10 +36,7 @@ the part that needs tuning; treat it as the file you iterate on.
 lazy.nvim:
 
 ```lua
-{
-  dir = "~/Work/Personal/code-learning-ai-pluggin", -- or a git URL once published
-  opts = {},
-}
+{ "Juano97/mentor.nvim", opts = {} }
 ```
 
 Then `:checkhealth mentor` to confirm the backend and the sandbox settings.

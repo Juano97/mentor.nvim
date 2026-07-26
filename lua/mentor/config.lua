@@ -23,7 +23,13 @@ M.defaults = {
   ---------------------------------------------------------------------------
   claude_cli = {
     cmd = "claude",
-    model = nil, -- nil = the user's default; e.g. "sonnet", "opus"
+    -- nil = whatever the CLI is set to. Anything `--model` accepts works: an
+    -- alias ("opus", "sonnet") or a full model id.
+    model = nil,
+    -- Suggestions for :MentorModel's completion, nothing more — any string is
+    -- accepted. Deliberately just the aliases: pinning version numbers in here
+    -- would only rot, and `claude --model` is the authority on what exists.
+    models = { "default", "opus", "sonnet", "haiku" },
 
     -- THE HARD GUARDRAIL. These are not suggestions to the model; the tools
     -- simply are not present in the session, so there is nothing to refuse.
@@ -56,6 +62,9 @@ M.defaults = {
   openai_compat = {
     base_url = "https://generativelanguage.googleapis.com/v1beta/openai",
     model = "gemini-2.0-flash",
+    -- :MentorModel completion. Empty by default: what an endpoint serves is
+    -- entirely up to the endpoint, so only you can fill this in usefully.
+    models = {},
     api_key_env = "GEMINI_API_KEY",
     max_tokens = 2048,
     stream = true,
@@ -69,6 +78,15 @@ M.defaults = {
     diff_target = "worktree",
     -- Cap on a visual selection sent with a question.
     max_selection_lines = 200,
+
+    -- Project brief: a file at the repo root saying what this project is, sent
+    -- once at the start of a conversation so the mentor is not inferring the
+    -- whole codebase from one diff. Set false to never look for one.
+    project_brief = true,
+    -- Searched at the repo root, first hit wins. The first entry doubles as
+    -- what :MentorInit drafts; the rest are read but never written.
+    project_brief_files = { "MENTOR.md", "CLAUDE.md", "AGENTS.md" },
+    max_brief_lines = 200,
   },
 
   ---------------------------------------------------------------------------

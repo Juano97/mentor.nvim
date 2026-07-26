@@ -55,6 +55,30 @@ function M.review()
   session.review()
 end
 
+--- Draft a project brief into a buffer you review and save yourself.
+function M.init()
+  session.init()
+end
+
+--- Point the active backend at a different model, from the next turn on.
+---@param name string|nil omit to report the current one; "default" to unset
+---@return string|nil model
+function M.set_model(name)
+  return session.set_model(name)
+end
+
+--- The model the active backend would use.
+---@return string|nil model, string|nil backend
+function M.model()
+  return session.model()
+end
+
+--- Completion candidates for :MentorModel.
+---@return string[]
+function M.models()
+  return session.models()
+end
+
 function M.toggle()
   session.toggle()
 end

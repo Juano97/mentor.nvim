@@ -12,6 +12,8 @@ M.state = {
   provider_name = nil,
   provider_state = {}, -- session_id (CLI) or message history (HTTP)
   pending_selection = nil, -- code attached to the next message
+  briefed_root = nil, -- repo whose project brief this conversation has seen
+  shown_model = nil, -- model named in the transcript most recently
 }
 
 local function notify(msg, level)
@@ -20,49 +22,79 @@ end
 
 --- @param prompt string what the model sees
 --- @param echo string what the user sees in the panel
-local function send(prompt, echo)
+--- @param opts table|nil { sink, system, todos, state, on_done } see M.init
+--- @return boolean started false when nothing was sent
+local function send(prompt, echo, opts)
   if M.state.busy then
     notify("still answering — :MentorStop to cancel", vim.log.levels.WARN)
-    return
+    return false
   end
 
+  opts = opts or {}
   local cfg = config.get()
   local impl, name, err = provider.resolve(cfg)
   if not impl then
     notify(err, vim.log.levels.ERROR)
-    return
+    return false
   end
 
-  -- Switching backends invalidates the conversation handle.
+  -- Switching backends invalidates the conversation handle, and with it
+  -- everything the old session had already been told.
   if M.state.provider_name and M.state.provider_name ~= name then
     M.state.provider_state = {}
+    M.state.briefed_root = nil
   end
   M.state.provider_name = name
+
+  local root = context.git_root() or vim.fn.getcwd()
+
+  -- The project brief goes in once per conversation, and again if you move to
+  -- another repo mid-session: the root follows the last code buffer, not cwd.
+  -- A side request carrying its own state (:MentorInit) is not a conversation
+  -- and gets none of this.
+  local briefing = nil
+  if not opts.state then
+    local brief = require("mentor.brief").read(cfg.context)
+    if brief and M.state.briefed_root ~= root then
+      briefing = root
+      prompt = prompts.brief(brief) .. "\n\n" .. prompt
+    end
+  end
 
   ui.open(cfg.window)
   ui.header("user")
   ui.append(echo .. "\n")
-  ui.header("mentor")
+
+  -- Name the model on the first answer and at every switch after that, so the
+  -- transcript says who said what without carrying a suffix on every turn.
+  local model = cfg[name].model
+  local announce = model ~= M.state.shown_model
+  M.state.shown_model = model
+  ui.header("mentor", announce and model or nil)
 
   M.state.busy = true
   ui.set_status("busy")
   local got_output = false
 
-  local system = prompts.system
-  if cfg.learning and cfg.learning.todos then
+  local system = opts.system or prompts.system
+  if opts.todos ~= false and cfg.learning and cfg.learning.todos then
     system = system .. prompts.todo_instructions
   end
+
+  -- Deltas land in the transcript unless a caller redirects them (:MentorInit
+  -- streams into a draft buffer instead).
+  local sink = opts.sink or ui.append
 
   M.state.handle = impl.chat({
     prompt = prompt,
     system = system,
-    state = M.state.provider_state,
+    state = opts.state or M.state.provider_state,
     cfg = cfg[name],
-    cwd = context.git_root() or vim.fn.getcwd(),
+    cwd = root,
 
     on_delta = function(text)
       got_output = true
-      ui.append(text)
+      sink(text)
     end,
 
     on_error = function(msg)
@@ -74,12 +106,22 @@ local function send(prompt, echo)
       M.state.busy = false
       M.state.handle = nil
       ui.set_status("idle")
+      -- Only mark the brief as delivered once something came back: a request
+      -- that died before the backend answered never recorded it either.
+      if briefing and got_output then
+        M.state.briefed_root = briefing
+      end
       if not got_output then
         ui.append("(no response)\n")
       end
       ui.append("\n")
+      if opts.on_done then
+        opts.on_done(got_output)
+      end
     end,
   })
+
+  return true
 end
 
 --- Free-form question. With no text, opens the panel and drops you in the
@@ -156,6 +198,69 @@ function M.review()
   send(prompts.review(diff, label), "Review my recent changes (" .. label .. ").")
 end
 
+--- Draft a project brief for this repo.
+---
+--- The draft streams into an unsaved buffer; nothing reaches disk until you
+--- save it. Refuses when a brief already exists — overwriting one is a job for
+--- you and your editor, not for the model.
+function M.init()
+  local cfg = config.get()
+  local brief = require("mentor.brief")
+
+  if not context.git_root() then
+    notify("not inside a git repository", vim.log.levels.WARN)
+    return
+  end
+
+  local existing = brief.find(cfg.context)
+  if existing then
+    notify(existing.name .. " already exists — mentor reads it at the start of a conversation")
+    return
+  end
+
+  local path, name = brief.target_path(cfg.context)
+  if not path then
+    notify("nowhere to write a brief", vim.log.levels.WARN)
+    return
+  end
+
+  local pending = brief.pending_draft(path)
+  if pending then
+    notify(("an unsaved %s draft is already open — `:w` it or `:bd!` it first"):format(name))
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_buf(w) == pending then
+        vim.api.nvim_set_current_win(w)
+        break
+      end
+    end
+    return
+  end
+
+  local buf, win = brief.open_draft(path)
+
+  local started = send(prompts.init_brief(name), "Draft " .. name .. " for this project.", {
+    system = prompts.system .. prompts.brief_instructions,
+    todos = false, -- a handback section has no business inside the document
+    -- A fresh state: a whole document sitting in the history would follow the
+    -- conversation around for no benefit.
+    state = {},
+    sink = function(text)
+      brief.append(buf, text)
+    end,
+    on_done = function(got_output)
+      if got_output then
+        notify(name .. " drafted — read it, then :w to keep it")
+      end
+    end,
+  })
+
+  if not started then
+    brief.discard_draft(buf, win)
+    return
+  end
+  ui.append("drafting into " .. name .. " — read it, then `:w` to keep it.\n")
+end
+
 function M.stop()
   if not M.state.busy or not M.state.handle then
     notify("nothing running")
@@ -175,6 +280,8 @@ function M.reset()
   M.state.provider_state = {}
   M.state.provider_name = nil
   M.state.pending_selection = nil
+  M.state.briefed_root = nil -- the next conversation gets the brief again
+  M.state.shown_model = nil -- ...and re-states which model is answering
   ui.set_pending(nil)
   ui.clear()
   notify("conversation reset")
@@ -182,6 +289,69 @@ end
 
 function M.toggle()
   ui.toggle(config.get().window)
+end
+
+--- The model for whichever backend would answer right now.
+---@return string|nil model, string|nil backend
+function M.model()
+  local cfg = config.get()
+  local _, backend = provider.resolve(cfg)
+  if not backend then
+    return nil, nil
+  end
+  return cfg[backend].model, backend
+end
+
+--- Completion candidates for :MentorModel. Suggestions only — `set_model`
+--- accepts anything, because the backend is the authority on what exists.
+---@return string[]
+function M.models()
+  local cfg = config.get()
+  local _, backend = provider.resolve(cfg)
+  return backend and vim.deepcopy(cfg[backend].models or {}) or {}
+end
+
+--- Point the active backend at a different model.
+---
+--- Takes effect on the next turn and leaves the conversation intact: every turn
+--- spawns a fresh process (or a fresh POST) and passes the model then, so
+--- unlike a backend switch there is no session state to invalidate.
+---@param name string|nil omit to report the current model
+---@return string|nil model
+function M.set_model(name)
+  local cfg = config.get()
+  local _, backend, err = provider.resolve(cfg)
+  if not backend then
+    notify(err, vim.log.levels.ERROR)
+    return nil
+  end
+  local bcfg = cfg[backend]
+
+  local function describe()
+    return bcfg.model or "the claude CLI's own default"
+  end
+
+  if not (name and vim.trim(name) ~= "") then
+    notify(("%s model: %s"):format(backend, describe()))
+    return bcfg.model
+  end
+
+  name = vim.trim(name)
+
+  -- "default" is the only way back to nil, i.e. deferring to the CLI again.
+  -- The HTTP backend has nothing to defer to: the model goes in the body.
+  if name == "default" then
+    if backend ~= "claude_cli" then
+      notify("this backend needs an explicit model", vim.log.levels.WARN)
+      return bcfg.model
+    end
+    bcfg.model = nil
+  else
+    bcfg.model = name
+  end
+
+  notify("model: " .. describe())
+  return bcfg.model
 end
 
 --- Turn learning-mode TODOs on or off for subsequent turns.

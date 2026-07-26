@@ -48,6 +48,8 @@ Then `:checkhealth mentor` to confirm the backend and the sandbox settings.
 | `:Mentor` | `<leader>mm` | Toggle the panel (right split, ~20% wide); opens straight into the input box |
 | `:MentorAsk [text]` | `<leader>ma` | Ask a question; prompts if you give no text |
 | `:MentorReview` | `<leader>mr` | Review your most recent changes |
+| `:MentorInit` | — | Draft a project brief for this repo; you review and save it |
+| `:MentorModel [name]` | — | Show or switch the model; no argument reports the current one |
 | `:MentorStop` | `<leader>ms` | Cancel the answer in flight |
 | `:MentorReset` | `<leader>mx` | Drop the conversation and clear the panel |
 | `:MentorTodos [on\|off]` | `<leader>mt` | Toggle learning-mode TODOs |
@@ -137,6 +139,92 @@ Markers go in bottom-up so earlier insertions don't shift later line numbers.
 
 Turn it off with `:MentorTodos off` or `learning = { todos = false }`.
 
+## Choosing a model
+
+Pin one in your config:
+
+```lua
+require("mentor").setup({
+  claude_cli = { model = "opus" },  -- alias, or a full model id
+})
+```
+
+The string is passed straight to `claude --model`, so anything the CLI accepts
+works — an alias like `opus`/`sonnet`/`haiku` for the current model of that
+size, or an exact id when you want to hold a specific version. Leave it `nil`
+and the CLI's own default applies. `claude --model` is the authority on what
+exists; the plugin never validates the string, so a new model works the day it
+ships without a plugin update.
+
+Switch without restarting:
+
+```vim
+:MentorModel opus        " from the next turn on
+:MentorModel             " which one am I talking to?
+:MentorModel default     " back to the CLI's default (claude_cli only)
+```
+
+This does **not** reset the conversation. Every turn spawns a fresh process and
+passes `--model` then, so a switch mid-thread just changes who answers next —
+useful for putting a hard question to a bigger model and dropping back down.
+The transcript marks the first answer and every switch after it:
+
+```
+▍mentor — opus
+Because the discount is applied after rounding …
+```
+
+On the HTTP backend `:MentorModel` sets `openai_compat.model` instead. Fill in
+`openai_compat.models` to get completion for whatever your endpoint serves;
+`claude_cli.models` is prefilled with the aliases.
+
+For automatic downgrade under load, `extra_args` reaches the rest of the CLI:
+`claude_cli = { extra_args = { "--fallback-model", "sonnet" } }`.
+
+## The project brief
+
+A question about one file rarely needs the whole project explained, but a
+question about *this* project usually does. So mentor looks for a brief at the
+repo root — `MENTOR.md`, then `CLAUDE.md`, then `AGENTS.md`, first hit wins — and
+sends it once at the start of a conversation. Nothing at the root means nothing
+sent, so single-file work is unaffected.
+
+The plugin reads the file itself rather than leaving it to the backend: with
+`setting_sources = ""` the CLI does not pick up a project `CLAUDE.md`, and the
+HTTP backend never would. Doing it here means both behave the same.
+
+It goes in as a **user** message, not part of the system prompt. Whatever sits at
+your repo root is not allowed to land underneath the teaching rules and quietly
+override them.
+
+Sent once per conversation — `:MentorReset` starts a new one, and so does opening
+a file in a different repo.
+
+### Writing one
+
+`:MentorInit` drafts one when there is none:
+
+```
+:MentorInit
+  → mentor reads the project with Read/Grep/Glob
+  → MENTOR.md opens in a split, unsaved, filling in as it streams
+  → you edit it and :w — or :q! and nothing ever existed
+```
+
+**The draft never touches disk.** It streams into an ordinary buffer for a file
+that does not exist yet, so `:w` creates it and `:q!` throws it away. That is the
+same bargain as `TODO(human)`: the plugin does the mechanical part, you decide
+what is kept. It also refuses to run when a brief already exists — replacing one
+is a job for you and your editor.
+
+It drafts `MENTOR.md` rather than `CLAUDE.md` on purpose. A `CLAUDE.md` is written
+for an agent that does the work; a tutor's brief wants different things in it, and
+overwriting the file your coding agent owns is a bad surprise. Existing ones are
+read, never written.
+
+Turn reading off with `context = { project_brief = false }`. `:MentorInit` still
+refuses to overwrite a file that is there.
+
 ## Configure
 
 Defaults live in `lua/mentor/config.lua`. Common changes:
@@ -148,13 +236,18 @@ require("mentor").setup({
 
   -- Let it read the codebase but nothing else. Set `tools = {}` for pure chat.
   claude_cli = {
-    model = "sonnet",
+    model = "sonnet", -- nil defers to the CLI; :MentorModel switches at runtime
     tools = { "Read", "Grep", "Glob" },
   },
 
   context = {
     diff_target = "head", -- "worktree" | "staged" | "head"
     max_selection_lines = 200,
+
+    project_brief = true, -- false to never read one
+    -- Searched at the repo root; the first entry is what :MentorInit drafts.
+    project_brief_files = { "MENTOR.md", "CLAUDE.md", "AGENTS.md" },
+    max_brief_lines = 200,
   },
 
   learning = { todos = true, marker = "TODO(human)" },
@@ -188,6 +281,7 @@ lua/mentor/
   session.lua           orchestration: prompt in, stream out, cancel, reset
   ui.lua                the side panel and streaming-safe append
   context.lua           git diff and cursor context
+  brief.lua             find/read the project brief, draft one into a buffer
   todo.lua              parse TODO(human) items, insert them as comments
   prompts.lua           the tutor system prompt  <- tune this
   provider/
@@ -230,6 +324,8 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 | `input_spec` | Input box geometry and keymaps, submit, context tracking from the panel |
 | `ui_spec` | Busy winbar and spinner, selection attach/clear, range clamping |
 | `todo_spec` | TODO parsing, last-block scoping, the on/off toggle |
+| `model_spec` | Model selection per backend, runtime switching, transcript labelling |
+| `brief_spec` | Brief discovery and precedence, sent once per conversation, `:MentorInit` drafting to a buffer and not to disk |
 | `commentstring_spec` | Comment syntax per language, indentation, bottom-up ordering |
 | `e2e_spec` | Live round-trip; asserts the model changed nothing on disk |
 
@@ -242,5 +338,6 @@ the network.
 - Each turn spawns a fresh `claude` process and resumes by session id, costing
   ~1–2s of startup. A persistent process using `--input-format stream-json`
   would remove that.
-- No per-project memory beyond the conversation; `CLAUDE.md` in the project root
-  is the obvious hook, but `setting_sources = ""` currently excludes it.
+- The project brief is re-read from disk on each new conversation but not while
+  one is running, so editing it mid-conversation has no effect until
+  `:MentorReset`.

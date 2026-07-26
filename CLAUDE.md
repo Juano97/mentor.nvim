@@ -37,6 +37,7 @@ denied. If you touch `build_args`, that spec is the thing that must stay green.
 | `lua/mentor/ui.lua` | The panel — transcript window + input window, winbar, spinner |
 | `lua/mentor/context.lua` | What the user is looking at: code buffer, cursor, selection, git diff |
 | `lua/mentor/prompts.lua` | System prompt and request wrappers |
+| `lua/mentor/brief.lua` | Finds/reads the project brief; drafts one into a buffer |
 | `lua/mentor/todo.lua` | Parses `TODO(human)` items and inserts them as comments |
 | `lua/mentor/provider/` | `claude_cli` (default) and `openai_compat`, behind `resolve()` |
 
@@ -64,6 +65,31 @@ line and a sentence; `todo.lua` builds the comment from the target buffer's
 `commentstring`. Inserting model-written *code* would break the guarantee even
 though no tool was involved. Markers go in bottom-up so earlier insertions do
 not shift later line numbers.
+
+**Model prose reaches disk only through a human keystroke.** `:MentorInit` has
+the model draft a whole `MENTOR.md`, which is the one place it is asked to
+produce a finished document — `prompts.brief_instructions` states that exception
+explicitly so the model does not have to reconcile it against the "never hand
+over finished work" rule. The draft streams into an unsaved buffer for a file
+that does not exist yet (`brief.open_draft`), so `:w` keeps it and `:q!` discards
+it. Never make that path write the file directly, and never let it target a file
+that already exists. Prose is the limit: this is not a licence to write code.
+
+**The project brief is a user message, never the system prompt.** `prompts.brief`
+wraps whatever is at the repo root, and that file is not vetted. Putting it in
+the system slot would let a stray line in someone's `CLAUDE.md` sit downstream of
+the pedagogy rules and override them. It goes in once per conversation, keyed by
+`session.state.briefed_root` — re-sent after `:MentorReset`, on a backend switch,
+and when the root changes mid-session, because the root follows the last code
+buffer rather than cwd.
+
+**A model switch is not a backend switch.** `set_model` mutates
+`cfg[backend].model` and stops there: every turn spawns a fresh process (or a
+fresh POST) and passes the model then, so there is no session to invalidate the
+way `provider_state` is invalidated when the backend changes. Never validate the
+model string against a hardcoded list — the CLI is the authority on what exists,
+and a list here would go stale the day a new model ships. `models` in the config
+is completion candidates only.
 
 **`commentstring` needs coaxing.** `bufadd()` + `bufload()` loads a file without
 running filetype detection, so `commentstring` is empty for any file not already

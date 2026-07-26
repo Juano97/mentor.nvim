@@ -25,6 +25,7 @@ function M.check()
     if impl.available(cfg.claude_cli) then
       local res = vim.system({ cfg.claude_cli.cmd, "--version" }, { text = true }):wait(5000)
       health.ok(("`%s` found: %s"):format(cfg.claude_cli.cmd, vim.trim(res.stdout or "?")))
+      health.info("model: " .. (cfg.claude_cli.model or "the CLI's own default (:MentorModel to change)"))
       health.info("allowed tools: " .. (table.concat(cfg.claude_cli.tools, ", ")))
       health.info("denied tools: " .. table.concat(cfg.claude_cli.disallowed_tools, ", "))
       if not cfg.claude_cli.strict_mcp_config then
@@ -57,6 +58,15 @@ function M.check()
     health.ok("`git` found (needed for :MentorReview)")
   else
     health.warn("`git` not found — :MentorReview will not work")
+  end
+
+  local found = require("mentor.brief").find(cfg.context)
+  if cfg.context.project_brief == false then
+    health.info("project brief: reading is off (context.project_brief = false)")
+  elseif found then
+    health.ok("project brief: " .. found.name)
+  else
+    health.info("project brief: none here — :MentorInit drafts one")
   end
 end
 

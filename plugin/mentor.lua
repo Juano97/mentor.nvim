@@ -31,6 +31,20 @@ cmd("MentorReview", function()
   require("mentor").review()
 end, { desc = "Review the most recent changes" })
 
+cmd("MentorInit", function()
+  require("mentor").init()
+end, { desc = "Draft a project brief for this repo (you review and save it)" })
+
+cmd("MentorModel", function(a)
+  require("mentor").set_model(a.args ~= "" and a.args or nil)
+end, {
+  nargs = "?",
+  complete = function()
+    return require("mentor").models()
+  end,
+  desc = "Show or set the model the active backend uses",
+})
+
 cmd("MentorStop", function()
   require("mentor").stop()
 end, { desc = "Cancel the answer in flight" })

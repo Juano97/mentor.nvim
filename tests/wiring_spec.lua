@@ -16,7 +16,7 @@ h.check("setup()", pcall(mentor.setup, { window = { width = 0.2 }, keymaps = { a
 local cmds = vim.api.nvim_get_commands({})
 for _, name in ipairs({
   "Mentor", "MentorAsk", "MentorReview", "MentorStop",
-  "MentorReset", "MentorTodos", "MentorTodoInsert",
+  "MentorReset", "MentorTodos", "MentorTodoInsert", "MentorInit", "MentorModel",
 }) do
   h.check("command :" .. name, cmds[name] ~= nil)
 end

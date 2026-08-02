@@ -91,6 +91,51 @@ function M.pending_draft(path)
   return nil
 end
 
+--- Label the draft window. The buffer opens empty, for a file that does not
+--- exist, in a split nobody asked for — without a line saying so it reads as a
+--- stray buffer you would be right to close. It also carries the one signal the
+--- panel cannot: the draft window is not the panel, so the panel's spinner is
+--- nowhere near the text you are watching arrive.
+---@param win integer|nil
+---@param text string empty clears the winbar
+local function set_winbar(win, text)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return
+  end
+  if text == "" then
+    vim.wo[win].winbar = ""
+    return
+  end
+  vim.wo[win].winbar = "%#Comment#" .. text:gsub("%%", "%%%%") .. "%*"
+end
+
+--- Streaming has started (or is about to).
+---@param win integer
+---@param name string
+function M.mark_drafting(win, name)
+  set_winbar(win, ("mentor is writing %s — nothing is on disk yet"):format(name))
+end
+
+--- Streaming is over, whether it ran out or `:MentorStop` cut it short; both
+--- leave you with the same decision, so both get the same wording.
+---@param win integer
+---@param name string
+function M.mark_done(win, name)
+  set_winbar(win, ("mentor stopped writing — `:w` keeps %s, `:q!` discards it"):format(name))
+end
+
+--- Nothing but the empty line `bufload` starts with — no model text, no edits
+--- of your own.
+---@param buf integer
+---@return boolean
+function M.is_empty(buf)
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return true
+  end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  return #lines == 0 or (#lines == 1 and lines[1] == "")
+end
+
 --- A window to put the draft in — never one of the panel's two, or the draft
 --- would open in the sidebar column when :MentorInit is run from the input box.
 ---@return integer|nil
@@ -133,6 +178,18 @@ function M.open_draft(path)
   vim.cmd("split")
   local win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win, buf)
+
+  -- Once you save, the file is real and the advice is wrong; a window reused
+  -- for another buffer must not inherit it either.
+  local group = vim.api.nvim_create_augroup("mentor_draft_" .. buf, { clear = true })
+  vim.api.nvim_create_autocmd({ "BufWritePost", "BufWinLeave" }, {
+    group = group,
+    buffer = buf,
+    callback = function()
+      set_winbar(win, "")
+      pcall(vim.api.nvim_del_augroup_by_id, group)
+    end,
+  })
 
   return buf, win
 end

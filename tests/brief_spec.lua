@@ -127,6 +127,37 @@ h.check("the panel says where the draft went",
   table.concat(vim.api.nvim_buf_get_lines(ui.state.buf, 0, -1, false), "\n")
     :find("drafting into MENTOR.md", 1, true) ~= nil)
 
+------------------------------------------------------------------ draft winbar
+
+local function win_showing(b)
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(w) == b then
+      return w
+    end
+  end
+  return nil
+end
+
+-- An unexplained empty split for a file that does not exist reads as something
+-- to close, so the window says what it is and when the writing stopped.
+local draft_win = win_showing(buf)
+h.check("the draft opens in its own window", draft_win ~= nil)
+h.check("the winbar says the writing is over",
+  vim.wo[draft_win].winbar:find("stopped writing", 1, true) ~= nil)
+h.check("...and how to keep or drop it",
+  vim.wo[draft_win].winbar:find("keeps MENTOR.md", 1, true) ~= nil)
+
+brief.mark_drafting(draft_win, "MENTOR.md")
+h.check("while streaming it says nothing is on disk",
+  vim.wo[draft_win].winbar:find("nothing is on disk", 1, true) ~= nil)
+brief.mark_done(draft_win, "MENTOR.md")
+
+-- That's advice about an unsaved draft; once written it is just a file. The
+-- event is fired by hand: a spec runs inside a VimEnter callback, so a real
+-- `:write` would not trigger a nested autocmd here.
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = buf })
+h.eq("saving clears the winbar", vim.wo[draft_win].winbar, "")
+
 -- That draft is unsaved and is the only copy, so a second run must not wipe it.
 get = h.stub_provider()
 session.init()
@@ -136,6 +167,24 @@ h.eq("the draft survives the second run",
   table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"), "ok")
 
 vim.api.nvim_buf_delete(buf, { force = true })
+
+-- A backend that answers with nothing leaves an empty buffer for a file that
+-- does not exist — clutter you would have to work out before closing.
+require("mentor.provider").resolve = function()
+  return {
+    display_name = "silent",
+    available = function() return true end,
+    chat = function(o)
+      vim.schedule(o.on_done)
+      return { kill = function() end }
+    end,
+  }, "claude_cli", nil
+end
+local before = #vim.api.nvim_list_wins()
+session.init()
+settle()
+h.eq("a silent answer leaves no draft window", #vim.api.nvim_list_wins(), before)
+h.check("...and no empty draft buffer", buf_named(root .. "/MENTOR.md") == nil)
 
 -- A backend that never starts must not leave an empty split behind.
 require("mentor.provider").resolve = function()

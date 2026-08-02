@@ -237,6 +237,7 @@ function M.init()
   end
 
   local buf, win = brief.open_draft(path)
+  brief.mark_drafting(win, name)
 
   local started = send(prompts.init_brief(name), "Draft " .. name .. " for this project.", {
     system = prompts.system .. prompts.brief_instructions,
@@ -249,7 +250,15 @@ function M.init()
     end,
     on_done = function(got_output)
       if got_output then
+        brief.mark_done(win, name)
         notify(name .. " drafted — read it, then :w to keep it")
+      elseif brief.is_empty(buf) then
+        -- Nothing came back, so the split is an empty buffer for a file that
+        -- does not exist. The panel already said what went wrong; leaving the
+        -- window behind only invites you to wonder what it is.
+        brief.discard_draft(buf, win)
+      else
+        brief.mark_done(win, name)
       end
     end,
   })

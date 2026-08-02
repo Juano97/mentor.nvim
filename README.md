@@ -211,6 +211,11 @@ a file in a different repo.
   → you edit it and :w — or :q! and nothing ever existed
 ```
 
+The split's winbar says which of those two states you are in: `mentor is writing
+MENTOR.md` while the text arrives, then `mentor stopped writing` once it is done
+or you cancelled with `:MentorStop`. It clears when you save. If the backend
+answers with nothing, the empty split closes itself.
+
 **The draft never touches disk.** It streams into an ordinary buffer for a file
 that does not exist yet, so `:w` creates it and `:q!` throws it away. That is the
 same bargain as `TODO(human)`: the plugin does the mechanical part, you decide

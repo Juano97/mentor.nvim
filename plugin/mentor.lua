@@ -53,6 +53,19 @@ cmd("MentorReset", function()
   require("mentor").reset()
 end, { desc = "Clear the conversation and the panel" })
 
+cmd("MentorResume", function(a)
+  require("mentor").resume(a.args ~= "" and a.args or nil)
+end, {
+  nargs = "?",
+  -- The titles are prose and would not survive being command-line arguments,
+  -- so the completion is positions: 1 is the most recent. No argument picks.
+  complete = function()
+    local n = #require("mentor").saved()
+    return vim.tbl_map(tostring, vim.fn.range(1, math.min(n, 9)))
+  end,
+  desc = "Resume a saved conversation for this repo",
+})
+
 cmd("MentorTodos", function(a)
   local arg = a.args
   local enable = nil

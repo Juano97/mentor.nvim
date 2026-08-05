@@ -64,7 +64,62 @@ vim.api.nvim_buf_set_lines(ui.state.input_buf, 0, -1, false, { "   ", "" })
 ui.submit()
 h.check("whitespace-only submit is a no-op", captured == nil)
 
+------------------------------------------------------------- panel commands
+
+-- A question that merely starts with a slash is still a question.
+captured = nil
+vim.api.nvim_buf_set_lines(ui.state.input_buf, 0, -1, false, { "/usr/bin/env, what is that?" })
+ui.submit()
+h.eq("a path is not a command", captured, "/usr/bin/env, what is that?")
+
 session.ask = real_ask
+
+local resumed = "none"
+local real_resume = session.resume
+session.resume = function(which) resumed = which end
+
+local function type_in(text)
+  vim.api.nvim_buf_set_lines(ui.state.input_buf, 0, -1, false, { text })
+  ui.submit()
+end
+local function input_text()
+  return table.concat(vim.api.nvim_buf_get_lines(ui.state.input_buf, 0, -1, false), "")
+end
+
+type_in("/resume")
+h.eq("/resume takes the most recent", resumed, "1")
+h.eq("...and clears the box", input_text(), "")
+
+type_in("/resume 3")
+h.eq("/resume n takes that one", resumed, "3")
+
+type_in("/resume list")
+h.eq("/resume list opens the picker", resumed, nil)
+
+-- A typo must not cost a turn, and must not lose what you typed.
+resumed = "none"
+captured = nil
+local warned = 0
+local real_notify = vim.notify
+vim.notify = function(_, level)
+  if level == vim.log.levels.WARN then
+    warned = warned + 1
+  end
+end
+session.ask = function(text) captured = text end
+type_in("/resune")
+session.ask = real_ask
+vim.notify = real_notify
+
+h.check("an unknown command is not sent to the model", captured == nil)
+h.eq("...it is reported", warned, 1)
+h.eq("...and the text stays put", input_text(), "/resune")
+
+type_in("/help")
+h.check("/help lists the commands",
+  table.concat(ui.lines(), "\n"):find("/resume list", 1, true) ~= nil)
+
+session.resume = real_resume
 
 ui.close()
 h.check("close tears down both windows", not ui.win_valid() and not ui.input_win_valid())

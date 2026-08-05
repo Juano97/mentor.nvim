@@ -39,6 +39,7 @@ denied. If you touch `build_args`, that spec is the thing that must stay green.
 | `lua/mentor/prompts.lua` | System prompt and request wrappers |
 | `lua/mentor/brief.lua` | Finds/reads the project brief; drafts one into a buffer |
 | `lua/mentor/todo.lua` | Parses `TODO(human)` items and inserts them as comments |
+| `lua/mentor/store.lua` | Saved conversations on disk: write, list, prune |
 | `lua/mentor/provider/` | `claude_cli` (default) and `openai_compat`, behind `resolve()` |
 
 ## Invariants worth knowing
@@ -60,6 +61,21 @@ has an input box, the cursor is *in the panel* when a question is sent. So
 **The transcript buffer is `modifiable = false` at rest.** `append()` flips it
 on and back off. Never leave it writable.
 
+**Fill the transcript only once it has a window.** A buffer nobody is displaying
+keeps its view at line 1, so text put in beforehand shows from the top when a
+window finally opens — which is how a resumed conversation used to land you at
+the beginning of a thread you had already read. `session.restore` calls
+`ui.open` first for that reason. `ui.scroll_to_end()` then moves unconditionally,
+unlike `follow()`, which declines while the panel is the current window: for a
+conversation you just asked to load there is no reader to interrupt.
+
+**The input box takes commands, not just questions.** `ui.submit` hands the line
+to `session.submit`, which routes a leading `/word` to `COMMANDS` and everything
+else to `ask`. The name must be a bare word, so `/usr/bin/env, what is that?`
+stays a question; a slash-word that is *not* a command is refused and left in the
+box rather than spent as a turn. `submit` returns whether it took the text, and
+that boolean is what tells the box whether to clear.
+
 **The scroll clamp has to run a tick late.** `WinScrolled` on the transcript
 window pulls the view back so the last line stays on the bottom row. Correcting
 inside the callback works for `<C-e>` and silently does nothing for `<C-f>`,
@@ -76,14 +92,23 @@ line and a sentence; `todo.lua` builds the comment from the target buffer's
 though no tool was involved. Markers go in bottom-up so earlier insertions do
 not shift later line numbers.
 
-**Model prose reaches disk only through a human keystroke.** `:MentorInit` has
-the model draft a whole `MENTOR.md`, which is the one place it is asked to
-produce a finished document — `prompts.brief_instructions` states that exception
-explicitly so the model does not have to reconcile it against the "never hand
-over finished work" rule. The draft streams into an unsaved buffer for a file
-that does not exist yet (`brief.open_draft`), so `:w` keeps it and `:q!` discards
-it. Never make that path write the file directly, and never let it target a file
-that already exists. Prose is the limit: this is not a licence to write code.
+**Model prose reaches the *project* only through a human keystroke.**
+`:MentorInit` has the model draft a whole `MENTOR.md`, which is the one place it
+is asked to produce a finished document — `prompts.brief_instructions` states
+that exception explicitly so the model does not have to reconcile it against the
+"never hand over finished work" rule. The draft streams into an unsaved buffer
+for a file that does not exist yet (`brief.open_draft`), so `:w` keeps it and
+`:q!` discards it. Never make that path write the file directly, and never let it
+target a file that already exists. Prose is the limit: this is not a licence to
+write code.
+
+The one automatic write is `store.lua`, and it is deliberately outside the
+project: saved conversations go to `stdpath("state")/mentor/<repo>/`, mode 0600,
+so `:MentorResume` can pick a thread up in a later nvim. Nothing there is ever
+read back into a *file* — it repopulates the panel and the provider handle, and
+that is all. `history.save = false` turns it off. If a change would put model
+text into the working tree without a keystroke, it belongs on the other side of
+this line.
 
 **The project brief is a user message, never the system prompt.** `prompts.brief`
 wraps whatever is at the repo root, and that file is not vetted. Putting it in
@@ -92,6 +117,17 @@ the pedagogy rules and override them. It goes in once per conversation, keyed by
 `session.state.briefed_root` — re-sent after `:MentorReset`, on a backend switch,
 and when the root changes mid-session, because the root follows the last code
 buffer rather than cwd.
+
+**A conversation is saved per turn, not on exit.** `session.remember` writes the
+whole record every time a turn completes, because nvim does not always get to
+say goodbye and surviving that is the entire point. `:MentorReset` clears
+`state.conversation` rather than deleting anything: the old thread stays on disk
+as its own entry and `:MentorResume` can still reach it. What resuming restores
+differs by backend — `claude_cli` stores one session id and the CLI holds the
+history in its own store (so a pruned session comes back as "No conversation
+found", which `claude_cli.lua` handles by dropping the dead id), while
+`openai_compat` has no server-side session and its saved message list *is* the
+conversation.
 
 **A model switch is not a backend switch.** `set_model` mutates
 `cfg[backend].model` and stops there: every turn spawns a fresh process (or a

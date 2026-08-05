@@ -91,6 +91,18 @@ function M.reset()
   session.reset()
 end
 
+--- Pick up a conversation from an earlier nvim.
+---@param which string|nil index, 1 being the most recent; omitted picks
+function M.resume(which)
+  session.resume(which)
+end
+
+--- Saved conversations for the repo you are working in, newest first.
+---@return table[]
+function M.saved()
+  return (session.saved())
+end
+
 --- Toggle learning-mode TODO(human) items.
 ---@param enable boolean|nil omit to flip
 function M.toggle_todos(enable)

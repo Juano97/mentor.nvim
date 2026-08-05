@@ -172,11 +172,13 @@ function M.submit()
   if text == "" then
     return
   end
+  if not require("mentor.session").submit(text) then
+    return
+  end
   vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { "" })
   if vim.fn.mode():sub(1, 1) == "i" then
     vim.cmd("stopinsert")
   end
-  require("mentor.session").ask(text)
 end
 
 ---@return integer bufnr
@@ -347,16 +349,25 @@ end
 
 ----------------------------------------------------------------- transcript io
 
--- Scroll to the bottom, but never steal the cursor if the user is reading.
-local function follow()
+--- Put the transcript on its last line.
+---
+--- Unconditional, unlike `follow()`: for a conversation you just asked to load,
+--- the end is the part you want, and there is no reader to interrupt. Needs the
+--- panel to be open — a buffer with no window has no view to move.
+function M.scroll_to_end()
   if not M.win_valid() or not valid_buf(M.state.buf) then
-    return
-  end
-  if vim.api.nvim_get_current_win() == M.state.win then
     return
   end
   local n = vim.api.nvim_buf_line_count(M.state.buf)
   pcall(vim.api.nvim_win_set_cursor, M.state.win, { n, 0 })
+end
+
+-- Scroll to the bottom, but never steal the cursor if the user is reading.
+local function follow()
+  if vim.api.nvim_get_current_win() == M.state.win then
+    return
+  end
+  M.scroll_to_end()
 end
 
 --- Append text that may arrive mid-line (streaming deltas).
@@ -407,6 +418,22 @@ function M.clear()
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
   vim.bo[buf].modifiable = false
+end
+
+--- The transcript as it stands, for saving it.
+---@return string[]
+function M.lines()
+  return vim.api.nvim_buf_get_lines(M.ensure_buf(), 0, -1, false)
+end
+
+--- Put a whole transcript back (resuming a saved conversation).
+---@param lines string[]
+function M.replace(lines)
+  local buf = M.ensure_buf()
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  follow()
 end
 
 return M

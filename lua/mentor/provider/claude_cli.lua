@@ -62,6 +62,7 @@ function M.chat(o)
   local cmd = vim.list_extend({ cfg.cmd }, build_args(cfg, o.system, o.state))
   local pending, stderr_chunks = "", {}
   local saw_delta = false
+  local reported = false -- the result event already explained the failure
 
   local function handle_event(ev)
     -- The session id shows up on the init event and again on the result;
@@ -89,7 +90,18 @@ function M.chat(o)
       end
     elseif ev.type == "result" then
       if ev.is_error then
-        o.on_error(tostring(ev.result or ev.subtype or "claude reported an error"))
+        local detail = table.concat(ev.errors or {}, "; ")
+        -- A resumed session the CLI no longer has: it prunes its own store, and
+        -- a session id from another machine was never there. The id is dead
+        -- weight, so drop it — the next question opens a new conversation
+        -- instead of failing this way forever. The transcript stays put.
+        if detail:find("No conversation found", 1, true) then
+          o.state.session_id = nil
+          detail = detail .. "\nthe next question starts a new conversation"
+        end
+        reported = true
+        o.on_error(detail ~= "" and detail
+          or tostring(ev.result or ev.subtype or "claude reported an error"))
       elseif not saw_delta and type(ev.result) == "string" then
         -- Partial messages never arrived; fall back to the final text.
         o.on_delta(ev.result)
@@ -130,8 +142,9 @@ function M.chat(o)
     end,
   }, function(res)
     vim.schedule(function()
-      -- 143 = SIGTERM, i.e. the user cancelled with :MentorStop.
-      if res.code ~= 0 and res.code ~= 143 then
+      -- 143 = SIGTERM, i.e. the user cancelled with :MentorStop. A failure the
+      -- result event already described does not need saying twice.
+      if res.code ~= 0 and res.code ~= 143 and not reported then
         local detail = vim.trim(table.concat(stderr_chunks, ""))
         o.on_error(("claude exited with %d%s"):format(
           res.code, detail ~= "" and ("\n" .. detail) or ""))

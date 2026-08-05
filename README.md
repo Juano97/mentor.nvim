@@ -52,6 +52,7 @@ Then `:checkhealth mentor` to confirm the backend and the sandbox settings.
 | `:MentorModel [name]` | — | Show or switch the model; no argument reports the current one |
 | `:MentorStop` | `<leader>ms` | Cancel the answer in flight |
 | `:MentorReset` | `<leader>mx` | Drop the conversation and clear the panel |
+| `:MentorResume [n]` | — | Pick up a saved conversation for this repo; no argument opens a picker |
 | `:MentorTodos [on\|off]` | `<leader>mt` | Toggle learning-mode TODOs |
 | `:MentorTodoInsert` | `<leader>mi` | Insert the latest TODOs as comments |
 
@@ -75,6 +76,22 @@ input box underneath:
 The input box's winbar is the status line: `ask — <CR> send` when idle, a
 spinner and `thinking… :MentorStop` while a reply streams, plus `[cart.py:4-9]`
 when a selection is attached.
+
+The box takes commands as well as questions, so the usual ones do not cost you a
+trip to `:`— type `/help` in it for the list:
+
+| Typed in the box | Does |
+|---|---|
+| `/resume` | Pick the most recent conversation back up |
+| `/resume 2` | …or the second most recent |
+| `/resume list` | Choose from all of them |
+| `/reset` | Start a new conversation |
+| `/stop` | Cancel the answer in flight |
+
+Anything else starting with `/` that is not a command is refused rather than
+sent, and your text stays in the box — a mistyped `/resume` costs a correction,
+not a turn. A question that merely begins with a path (`/usr/bin/env, what is
+that?`) is still a question.
 
 | Key | Where | Does |
 |---|---|---|
@@ -110,6 +127,48 @@ tagged with the file's language, capped at `context.max_selection_lines`.
 
 `:MentorReview` uses unstaged changes by default, falls back to the last commit
 when the tree is clean, and truncates past `context.max_diff_lines`.
+
+### Picking a conversation back up
+
+Closing nvim does not end the conversation. Every answered turn is saved per
+repo, and `:MentorResume` brings one back — the transcript you were reading and
+the thread itself, so the next question continues where you left off:
+
+```
+:MentorResume        " pick from this repo's saved conversations
+:MentorResume 1      " the most recent, no picker
+```
+
+or `/resume` in the input box without leaving the panel. That one takes the most
+recent by default — from in there you are usually carrying on from the last thing
+you were doing — and `/resume list` gets you the picker.
+
+Either way the panel opens showing the *end* of the conversation, where you left
+off, with the cursor in the input box.
+
+The picker is `vim.ui.select`, so whatever you already use (Telescope, fzf,
+snacks) is what you get:
+
+```
+Resume a mentor conversation
+  1: 12 min ago    why is this function empty?  (4 turns)
+  2: 3 hours ago   review my parser changes  (2 turns)
+  3: 2026-07-28    how does the scroll clamp work?  (7 turns)
+```
+
+`:MentorReset` starts a *new* conversation rather than deleting the old one, so
+resetting and later resuming are both available. The last 20 per repo are kept
+(`history.max`); older ones are pruned.
+
+Conversations live in `stdpath("state")/mentor/<repo>/`, mode 0600 — never in
+your project. This is the one thing the plugin writes without you pressing a key,
+and it holds the transcript, which quotes your code. Set `history = { save =
+false }` to keep everything in memory and lose it with the process.
+
+With the `claude_cli` backend, only a session id is stored: the conversation
+itself already lives in the CLI's own store under `~/.claude/projects/`. If the
+CLI has since pruned that session, mentor says so and the next question starts a
+fresh one — the transcript is still there to read.
 
 ## Learning mode (`TODO(human)`)
 
@@ -261,6 +320,9 @@ require("mentor").setup({
     max_brief_lines = 200,
   },
 
+  -- Saved conversations, for :MentorResume. save=false keeps them in memory.
+  history = { save = true, max = 20, dir = nil },
+
   learning = { todos = true, marker = "TODO(human)" },
 
   keymaps = { review = "<leader>rr", ask = false }, -- false disables one
@@ -337,6 +399,7 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 | `todo_spec` | TODO parsing, last-block scoping, the on/off toggle |
 | `model_spec` | Model selection per backend, runtime switching, transcript labelling |
 | `brief_spec` | Brief discovery and precedence, sent once per conversation, `:MentorInit` drafting to a buffer and not to disk |
+| `history_spec` | Saving a conversation per turn, resuming one, pruning, a session the backend dropped |
 | `commentstring_spec` | Comment syntax per language, indentation, bottom-up ordering |
 | `e2e_spec` | Live round-trip; asserts the model changed nothing on disk |
 

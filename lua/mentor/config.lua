@@ -74,6 +74,19 @@ M.defaults = {
     extra_headers = {},
   },
 
+  ---------------------------------------------------------------------------
+  -- Saved conversations. Each turn writes the transcript and the backend's
+  -- handle on it to stdpath("state"), per repo, so :MentorResume can pick a
+  -- conversation up in a later nvim. This is the one place the plugin puts the
+  -- model's prose on disk without you pressing a key; save = false keeps
+  -- everything in memory and loses it with the process.
+  ---------------------------------------------------------------------------
+  history = {
+    save = true,
+    max = 20, -- conversations kept per repo; the oldest are pruned first
+    dir = nil, -- default: stdpath("state") .. "/mentor"
+  },
+
   context = {
     -- Truncate large diffs so one refactor doesn't blow the request up.
     max_diff_lines = 600,

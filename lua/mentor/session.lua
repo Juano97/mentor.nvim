@@ -2,6 +2,7 @@ local config = require("mentor.config")
 local context = require("mentor.context")
 local prompts = require("mentor.prompts")
 local provider = require("mentor.provider")
+local store = require("mentor.store")
 local ui = require("mentor.ui")
 
 local M = {}
@@ -14,10 +15,47 @@ M.state = {
   pending_selection = nil, -- code attached to the next message
   briefed_root = nil, -- repo whose project brief this conversation has seen
   shown_model = nil, -- model named in the transcript most recently
+  conversation = nil, -- the saved record this conversation writes to
 }
 
 local function notify(msg, level)
   vim.notify("[mentor] " .. msg, level or vim.log.levels.INFO)
+end
+
+--- Record the turn that just finished, so a later nvim can resume it.
+---
+--- Written per turn rather than on exit: nvim does not always get to say
+--- goodbye, and the whole point is surviving the times it doesn't.
+---@param root string
+---@param name string backend
+---@param echo string what the user asked, for the title
+local function remember(root, name, echo)
+  local cfg = config.get()
+  if not cfg.history or cfg.history.save == false then
+    return
+  end
+
+  local conv = M.state.conversation
+  if not conv or conv.root ~= root then
+    conv = { id = store.new_id(), root = root, started = store.now(), turns = 0 }
+    M.state.conversation = conv
+  end
+
+  -- The opening question names the conversation in the picker; later ones
+  -- would only rename it out from under you.
+  if not conv.title or conv.title == "" then
+    conv.title = vim.trim((echo:gsub("%s+", " "))):sub(1, 60)
+  end
+
+  conv.turns = (conv.turns or 0) + 1
+  conv.updated = store.now()
+  conv.provider = name
+  conv.provider_state = M.state.provider_state
+  conv.model = cfg[name] and cfg[name].model or nil
+  conv.briefed = M.state.briefed_root
+  conv.lines = ui.lines()
+
+  store.save(cfg.history, conv)
 end
 
 --- @param prompt string what the model sees
@@ -115,6 +153,11 @@ local function send(prompt, echo, opts)
         ui.append("(no response)\n")
       end
       ui.append("\n")
+      -- A side request carrying its own state (:MentorInit) is not part of the
+      -- conversation and has nothing to resume.
+      if got_output and not opts.state then
+        remember(root, name, echo)
+      end
       if opts.on_done then
         opts.on_done(got_output)
       end
@@ -282,6 +325,10 @@ function M.stop()
 end
 
 --- Drop conversation history and clear the panel.
+---
+--- The conversation that was running stays on disk under its own entry: reset
+--- starts the next one, it does not erase the last one. `:MentorResume` is how
+--- you get it back.
 function M.reset()
   if M.state.busy then
     M.stop()
@@ -291,9 +338,159 @@ function M.reset()
   M.state.pending_selection = nil
   M.state.briefed_root = nil -- the next conversation gets the brief again
   M.state.shown_model = nil -- ...and re-states which model is answering
+  M.state.conversation = nil -- ...and is saved as a conversation of its own
   ui.set_pending(nil)
   ui.clear()
   notify("conversation reset")
+end
+
+--- Saved conversations for the repo you are working in, newest first.
+---@return table[] records, string root
+function M.saved()
+  local cfg = config.get()
+  local root = context.git_root() or vim.fn.getcwd()
+  return store.list(cfg.history or {}, root), root
+end
+
+--- Load a saved conversation into the panel and hand it back to the backend.
+---@param conv table a record from `M.saved()`
+local function restore(conv)
+  local cfg = config.get()
+
+  M.state.provider_state = conv.provider_state or {}
+  M.state.provider_name = conv.provider
+  M.state.briefed_root = conv.briefed -- it has already been told, once
+  M.state.shown_model = conv.model
+  M.state.pending_selection = nil
+  M.state.conversation = conv
+
+  -- Before the transcript goes in, not after: filling a buffer that has no
+  -- window leaves the view at line 1 when one finally opens, and a resumed
+  -- conversation would land you at the top of a thread you have already read.
+  ui.open(cfg.window)
+
+  ui.set_pending(nil)
+  ui.replace(conv.lines or {})
+  ui.ensure_blank_line()
+  ui.append(("▍resumed — %s, %d turn%s\n\n"):format(
+    store.ago(conv.updated), conv.turns or 0, (conv.turns or 0) == 1 and "" or "s"))
+
+  -- Answering from a different backend than the one that was talking means a
+  -- fresh conversation on the next question: `send` clears the handle when the
+  -- name changes. Say so now rather than let it be a surprise.
+  local _, name = provider.resolve(cfg)
+  if name and conv.provider and name ~= conv.provider then
+    ui.append(("(%s answered this; %s will start over from here)\n\n"):format(
+      conv.provider, name))
+  end
+
+  -- The end of the conversation is where you left off, so that is what the
+  -- panel shows. `follow()` would decline once the panel is the current window.
+  ui.scroll_to_end()
+  ui.focus_input(cfg.window)
+  notify(("resumed: %s"):format(conv.title or conv.id))
+end
+
+--- Pick up a conversation saved by an earlier session.
+---@param which string|nil index into `M.saved()`, 1 being the most recent;
+---                        omitted opens a picker
+function M.resume(which)
+  if M.state.busy then
+    notify("still answering — :MentorStop first", vim.log.levels.WARN)
+    return
+  end
+
+  local saved, root = M.saved()
+  if #saved == 0 then
+    notify(("no saved conversations for %s"):format(vim.fn.fnamemodify(root, ":t")))
+    return
+  end
+
+  if which and vim.trim(which) ~= "" then
+    local n = tonumber(which)
+    if not n or not saved[n] then
+      notify(("no conversation %s — there are %d"):format(which, #saved), vim.log.levels.WARN)
+      return
+    end
+    restore(saved[n])
+    return
+  end
+
+  -- vim.ui.select rather than a window of our own: whatever picker the user
+  -- has already wired up is the one they want.
+  vim.ui.select(saved, {
+    prompt = "Resume a mentor conversation",
+    format_item = store.describe,
+  }, function(choice)
+    if choice then
+      restore(choice)
+    end
+  end)
+end
+
+------------------------------------------------------------- panel commands
+
+--- What you can type in the input box instead of a question. The panel is
+--- where you already are: reaching for `:MentorResume` means leaving it, and
+--- the cursor was in the box for a reason.
+---
+--- `/resume` takes the most recent conversation rather than opening the picker
+--- the way `:MentorResume` does — from in here you are usually carrying on
+--- from the last thing you were doing, and `/resume list` is the picker.
+local COMMANDS = {
+  resume = function(args)
+    if args == "list" or args == "?" then
+      M.resume(nil)
+    else
+      M.resume(args ~= "" and args or "1")
+    end
+  end,
+  reset = function() M.reset() end,
+  stop = function() M.stop() end,
+  help = function()
+    ui.open(config.get().window)
+    ui.ensure_blank_line()
+    ui.append(table.concat({
+      "▍panel commands",
+      "/resume        the most recent conversation here",
+      "/resume 2      …or the second most recent",
+      "/resume list   choose from all of them",
+      "/reset         start a new conversation",
+      "/stop          cancel the answer in flight",
+      "",
+      "",
+    }, "\n"))
+    ui.scroll_to_end()
+  end,
+}
+
+--- A line typed in the input box: a command if it is one, otherwise a question.
+---
+--- The name has to be a bare word — `/usr/bin/env, what is it?` is a question
+--- about a path, not a mistyped command. Anything that *does* look like a
+--- command but isn't one is refused rather than sent, so a typo costs a
+--- correction instead of a turn.
+---@param text string
+---@return boolean handled false to leave the text in the input box
+function M.submit(text)
+  local name, args = text:match("^/([%a][%w_-]*)%s+(.*)$")
+  if not name then
+    name, args = text:match("^/([%a][%w_-]*)$"), ""
+  end
+
+  if not name then
+    M.ask(text)
+    return true
+  end
+
+  local command = COMMANDS[name:lower()]
+  if not command then
+    notify(("no /%s here — /help lists what there is"):format(name), vim.log.levels.WARN)
+    return false
+  end
+
+  command(vim.trim(args))
+  return true
 end
 
 function M.toggle()

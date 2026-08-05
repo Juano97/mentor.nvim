@@ -15,6 +15,11 @@ vim.opt.swapfile = false
 vim.opt.shada = ""
 vim.opt.more = false
 
+-- Every answered question saves a conversation. Point that at nvim's own temp
+-- directory, which goes away with the process, so a test run never leaves
+-- anything in the real stdpath("state").
+require("mentor.config").defaults.history.dir = vim.fn.tempname()
+
 vim.api.nvim_create_autocmd("VimEnter", { once = true, callback = function()
   local h = require("harness")
   local spec = vim.env.MENTOR_SPEC

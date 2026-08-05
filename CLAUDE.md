@@ -60,6 +60,16 @@ has an input box, the cursor is *in the panel* when a question is sent. So
 **The transcript buffer is `modifiable = false` at rest.** `append()` flips it
 on and back off. Never leave it writable.
 
+**The scroll clamp has to run a tick late.** `WinScrolled` on the transcript
+window pulls the view back so the last line stays on the bottom row. Correcting
+inside the callback works for `<C-e>` and silently does nothing for `<C-f>`,
+which still has scrolling of its own to finish and overwrites you — hence
+`vim.schedule` and the `clamp_queued` flag. None of it is assertable headlessly:
+`WinScrolled` fires from the main loop after a redraw, and a headless nvim never
+redraws, so `ui_spec` checks that the autocmd is registered and leaves the
+behaviour to a real UI. Drive one over `--listen` + `--remote-send` if you
+change this.
+
 **The model never authors inserted text.** For `TODO(human)`, it emits a path, a
 line and a sentence; `todo.lua` builds the comment from the target buffer's
 `commentstring`. Inserting model-written *code* would break the guarantee even

@@ -95,9 +95,74 @@ function M.set_pending(label)
   M.render_winbar()
 end
 
+------------------------------------------------------------------------ scroll
+
+--- Stop the transcript scrolling off into the empty rows past its last line.
+---
+--- Vim will happily scroll until the final line sits at the *top* of the
+--- window, which in a panel this narrow means a screenful of `~` and the
+--- conversation gone. The end of the transcript is the end of the thing being
+--- read, so it stays on the bottom row.
+---
+--- Hooked to `WinScrolled` rather than to keys: `<C-e>`, `<C-f>`, the mouse
+--- wheel and whatever the user has bound themselves all arrive here, and
+--- remapping them one by one would miss the rest.
+local function clamp_scroll()
+  local win = M.state.win
+  if not valid_win(win) or not valid_buf(M.state.buf) then
+    return
+  end
+  vim.api.nvim_win_call(win, function()
+    local height = vim.api.nvim_win_get_height(win)
+    local view = vim.fn.winsaveview()
+    local top = view.topline
+
+    -- Screen rows, not buffer lines: `wrap` is on by default in a column this
+    -- narrow, so one line is often several rows and only the window knows how
+    -- many. `max_height` stops the count as soon as the answer is settled.
+    local function rows_below(t)
+      return vim.api.nvim_win_text_height(win, { start_row = t - 1, max_height = height }).all
+    end
+
+    -- Walking up beats solving for the topline: it lands on 1 by itself when
+    -- the whole transcript is shorter than the window.
+    while top > 1 and rows_below(top) < height do
+      top = top - 1
+    end
+
+    if top ~= view.topline then
+      view.topline = top
+      vim.fn.winrestview(view)
+    end
+  end)
+end
+
+--- Correct on the next tick, not inside the `WinScrolled` callback itself: a
+--- `<C-f>` still has scrolling of its own to finish when the event fires, and
+--- it overwrites anything set from in there. One tick later the view has
+--- settled and the correction sticks.
+---
+--- The flag collapses a burst of events into a single correction — a mouse
+--- wheel emits a stream of them.
+local clamp_queued = false
+local function clamp_scroll_soon()
+  if clamp_queued then
+    return
+  end
+  clamp_queued = true
+  vim.schedule(function()
+    clamp_queued = false
+    clamp_scroll()
+  end)
+end
+
 --------------------------------------------------------------------------- ui
 
 --- Send whatever is in the input box.
+---
+--- `session.submit` decides whether that is a question or a panel command, and
+--- says whether it took it. A no keeps the text where you typed it — a mistyped
+--- `/resume` is worth fixing, not retyping.
 function M.submit()
   if not valid_buf(M.state.input_buf) then
     return
@@ -222,6 +287,18 @@ function M.open(cfg)
 
   M.state.win = win
   M.state.input_win = iwin
+
+  -- Only the transcript. The input box is one you type into, so its view has to
+  -- follow the cursor, and a clamp would fight that.
+  local group = vim.api.nvim_create_augroup("mentor_panel", { clear = true })
+  if not cfg.scroll_past_end then
+    vim.api.nvim_create_autocmd("WinScrolled", {
+      group = group,
+      pattern = tostring(win),
+      callback = clamp_scroll_soon,
+    })
+  end
+
   M.render_winbar()
 
   if valid_win(prev) then
@@ -232,6 +309,7 @@ end
 
 function M.close()
   stop_spinner()
+  pcall(vim.api.nvim_del_augroup_by_name, "mentor_panel")
   for _, key in ipairs({ "input_win", "win" }) do
     if valid_win(M.state[key]) then
       pcall(vim.api.nvim_win_close, M.state[key], true)

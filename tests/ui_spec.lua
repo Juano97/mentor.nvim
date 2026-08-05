@@ -40,6 +40,33 @@ h.check("close stops the spinner", ui.state.timer == nil)
 ui.open(cfg.window)
 ui.set_status("idle")
 
+--------------------------------------------------------------- scroll clamp
+
+-- The clamp itself needs a real UI to assert: WinScrolled fires from the main
+-- loop after a redraw, and headless never redraws. What is checkable here is
+-- that the hook is on the transcript and only the transcript.
+local function scroll_autocmds(win)
+  return vim.api.nvim_get_autocmds({
+    group = "mentor_panel",
+    event = "WinScrolled",
+    pattern = tostring(win),
+  })
+end
+
+h.eq("clamping is on by default", cfg.window.scroll_past_end, false)
+h.eq("the transcript is hooked", #scroll_autocmds(ui.state.win), 1)
+-- The input box has to follow the cursor as you type, so it is left alone.
+h.eq("the input box is not", #scroll_autocmds(ui.state.input_win), 0)
+
+ui.close()
+h.check("closing drops the hook", not pcall(vim.api.nvim_get_autocmds,
+  { group = "mentor_panel", event = "WinScrolled" }))
+
+ui.open(vim.tbl_extend("force", cfg.window, { scroll_past_end = true }))
+h.eq("scroll_past_end opts out", #scroll_autocmds(ui.state.win), 0)
+ui.close()
+ui.open(cfg.window)
+
 ------------------------------------------------------------------ selection
 
 local visual = vim.tbl_filter(function(m)

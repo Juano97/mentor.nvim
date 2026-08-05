@@ -91,6 +91,10 @@ when a selection is attached.
 Questions carry the file and line you were last working in — not the panel, even
 though that is where the cursor is when you hit send. Reviews carry a `git diff`.
 
+Scrolling the transcript stops at its last line rather than carrying on into the
+empty rows below it, so the end of the answer stays on screen. Set
+`window = { scroll_past_end = true }` for stock Vim scrolling.
+
 ### Asking about specific lines
 
 Select lines and press `<leader>ma`, or use a range on the command:
@@ -237,7 +241,9 @@ Defaults live in `lua/mentor/config.lua`. Common changes:
 ```lua
 require("mentor").setup({
   -- focus_on_open=false makes :Mentor only reveal the panel, cursor unmoved.
-  window = { width = 0.25, input_height = 5, focus_on_open = true },
+  -- scroll_past_end=true drops the clamp on the transcript's last line.
+  window = { width = 0.25, input_height = 5, focus_on_open = true,
+    scroll_past_end = false },
 
   -- Let it read the codebase but nothing else. Set `tools = {}` for pure chat.
   claude_cli = {

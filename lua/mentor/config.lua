@@ -14,6 +14,9 @@ M.defaults = {
     -- Toggling the panel open puts the cursor in the input box and starts
     -- insert. Set false to have :Mentor only reveal the panel.
     focus_on_open = true,
+    -- The transcript stops at its last line instead of scrolling on into the
+    -- empty rows below it. Set true for stock Vim scrolling.
+    scroll_past_end = false,
   },
 
   ---------------------------------------------------------------------------

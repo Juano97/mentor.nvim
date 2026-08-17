@@ -609,4 +609,43 @@ function M.insert_todos()
   end
 end
 
+--- Delete the marker comments again once you have worked through them.
+--- The buffer you are working in by default; `all` sweeps the repo.
+---@param all boolean|nil
+function M.clear_todos(all)
+  local todo = require("mentor.todo")
+
+  -- Deliberately symmetrical with insert_todos: buffers are left modified and
+  -- unsaved, so nothing reaches disk without a keystroke of yours.
+  if all then
+    local removed, buffers, errors = todo.clear_all()
+    if removed == 0 then
+      notify("no TODO(human) markers in this repo")
+    else
+      notify(("removed %d marker%s in %d buffer%s (unsaved: :wa to keep)"):format(
+        removed, removed == 1 and "" or "s", buffers, buffers == 1 and "" or "s"))
+    end
+    for _, err in ipairs(errors) do
+      notify(err, vim.log.levels.WARN)
+    end
+    return
+  end
+
+  local buf = context.code_buf()
+  if not buf then
+    notify("no file buffer to clear", vim.log.levels.WARN)
+    return
+  end
+
+  local removed, err = todo.clear(buf)
+  if err then
+    notify(err, vim.log.levels.WARN)
+  elseif removed == 0 then
+    notify("no TODO(human) markers here")
+  else
+    notify(("removed %d marker%s (unsaved: :w to keep)")
+      :format(removed, removed == 1 and "" or "s"))
+  end
+end
+
 return M

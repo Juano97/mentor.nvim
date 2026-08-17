@@ -84,3 +84,7 @@ end, {
 cmd("MentorTodoInsert", function()
   require("mentor").insert_todos()
 end, { desc = "Insert the latest TODO(human) items as comments" })
+
+cmd("MentorTodoClear", function(a)
+  require("mentor").clear_todos(a.bang)
+end, { bang = true, desc = "Remove TODO(human) comments here, or repo-wide with !" })

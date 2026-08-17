@@ -29,6 +29,7 @@ function M.setup(opts)
   map(k.reset, M.reset, "reset conversation")
   map(k.todos, function() M.toggle_todos() end, "toggle learning TODOs")
   map(k.todo_insert, M.insert_todos, "insert TODO markers")
+  map(k.todo_clear, function() M.clear_todos() end, "clear TODO markers here")
 
   return M
 end
@@ -112,6 +113,12 @@ end
 --- Insert the latest TODO(human) items as comments in your buffers.
 function M.insert_todos()
   session.insert_todos()
+end
+
+--- Remove TODO(human) marker comments again.
+---@param all boolean|nil true sweeps the repo instead of the current buffer
+function M.clear_todos(all)
+  session.clear_todos(all)
 end
 
 return M

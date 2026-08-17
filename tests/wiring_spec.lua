@@ -16,11 +16,13 @@ h.check("setup()", pcall(mentor.setup, { window = { width = 0.2 }, keymaps = { a
 local cmds = vim.api.nvim_get_commands({})
 for _, name in ipairs({
   "Mentor", "MentorAsk", "MentorReview", "MentorStop",
-  "MentorReset", "MentorTodos", "MentorTodoInsert", "MentorInit", "MentorModel",
+  "MentorReset", "MentorTodos", "MentorTodoInsert", "MentorTodoClear",
+  "MentorInit", "MentorModel",
 }) do
   h.check("command :" .. name, cmds[name] ~= nil)
 end
 h.check(":MentorAsk accepts a range", cmds.MentorAsk and cmds.MentorAsk.range ~= nil)
+h.check(":MentorTodoClear takes a bang", cmds.MentorTodoClear and cmds.MentorTodoClear.bang == true)
 
 local cfg = require("mentor.config").get()
 h.eq("override applied", cfg.window.width, 0.2)

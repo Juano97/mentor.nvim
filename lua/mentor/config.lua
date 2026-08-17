@@ -124,6 +124,7 @@ M.defaults = {
     reset = "<leader>mx",
     todos = "<leader>mt", -- toggle learning-mode TODOs on/off
     todo_insert = "<leader>mi", -- insert the latest TODOs as comments
+    todo_clear = "<leader>mc", -- remove marker comments from this buffer
   },
 }
 

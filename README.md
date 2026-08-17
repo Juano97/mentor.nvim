@@ -55,6 +55,7 @@ Then `:checkhealth mentor` to confirm the backend and the sandbox settings.
 | `:MentorResume [n]` | — | Pick up a saved conversation for this repo; no argument opens a picker |
 | `:MentorTodos [on\|off]` | `<leader>mt` | Toggle learning-mode TODOs |
 | `:MentorTodoInsert` | `<leader>mi` | Insert the latest TODOs as comments |
+| `:MentorTodoClear[!]` | `<leader>mc` | Remove those comments again; `!` sweeps the repo |
 
 ### The panel
 
@@ -199,6 +200,14 @@ def total(items, discount=0):
 builds the comment using the target buffer's `commentstring` and inserts it. The
 inserted text is never model-authored code, and the AI still has no write tool.
 Markers go in bottom-up so earlier insertions don't shift later line numbers.
+
+Once you have worked through them, `:MentorTodoClear` takes the markers out of
+the buffer you are in, and `:MentorTodoClear!` sweeps the whole repo — including
+files you never opened, so markers left behind by an earlier session go too. It
+only removes lines that are *entirely* a marker comment: a `TODO(human):` you
+appended after real code, or a mention of one in prose, stays put. Like
+inserting, clearing leaves the buffers modified and unsaved, so `:w` (or `:wa`
+after a sweep) is what actually changes anything on disk.
 
 Turn it off with `:MentorTodos off` or `learning = { todos = false }`.
 

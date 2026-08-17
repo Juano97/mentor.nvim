@@ -92,6 +92,16 @@ line and a sentence; `todo.lua` builds the comment from the target buffer's
 though no tool was involved. Markers go in bottom-up so earlier insertions do
 not shift later line numbers.
 
+`todo.clear` is the inverse and stays symmetrical with it. It removes only lines
+that are *wholly* a marker comment — matched by taking the buffer's
+`commentstring` apart, not by a bare substring search, so a `TODO(human):` you
+appended after real code never takes the code with it — and it leaves buffers
+modified and unsaved, exactly as `insert` does; `:w` is the user's, on both
+sides. `:MentorTodoClear!` widens the sweep to the repo via `git grep
+--untracked`, and to the repo *only*: loaded buffers from other projects are
+filtered out by the git root, so a sweep here never reaches into another
+checkout you happen to have open.
+
 **Model prose reaches the *project* only through a human keystroke.**
 `:MentorInit` has the model draft a whole `MENTOR.md`, which is the one place it
 is asked to produce a finished document — `prompts.brief_instructions` states

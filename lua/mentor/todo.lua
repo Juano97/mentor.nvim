@@ -140,6 +140,153 @@ function M.insert(item)
   return true, ("%s:%d"):format(item.path, lnum)
 end
 
+--- Is this line a marker comment of the shape `insert()` writes?
+---
+--- Whole-line comment, the marker first in the body, and the colon that
+--- `insert()` puts after it. The colon is what keeps prose that merely mentions
+--- TODO(human) — a README line, a docstring — out of the sweep, and requiring
+--- the comment to be the whole line keeps a marker appended after real code
+--- (yours, not ours) from taking the code with it.
+---@param line string
+---@param cs string commentstring for the buffer the line came from
+---@param marker string
+---@return boolean
+function M.is_marker(line, cs, marker)
+  local prefix, suffix = cs:match("^(.-)%%s(.*)$")
+  if not prefix then
+    return false
+  end
+  prefix, suffix = vim.trim(prefix), vim.trim(suffix)
+
+  local body = vim.trim(line)
+  if prefix ~= "" then
+    if body:sub(1, #prefix) ~= prefix then
+      return false
+    end
+    body = vim.trim(body:sub(#prefix + 1))
+  end
+  if suffix ~= "" then
+    if body:sub(-#suffix) ~= suffix then
+      return false
+    end
+    body = vim.trim(body:sub(1, #body - #suffix))
+  end
+
+  return body:sub(1, #marker + 1) == marker .. ":"
+end
+
+--- Delete every marker comment in a buffer.
+---
+--- Like `insert()`, this leaves the buffer modified and unsaved: the plugin does
+--- the mechanical part, `:w` is yours.
+---@param buf integer
+---@return integer removed, string|nil error
+function M.clear(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return 0, "no such buffer"
+  end
+
+  local marker = require("mentor.config").get().learning.marker
+  local cs = M.commentstring(buf)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+  local hits = {}
+  for i, line in ipairs(lines) do
+    if M.is_marker(line, cs, marker) then
+      table.insert(hits, i)
+    end
+  end
+  if #hits == 0 then
+    -- Nothing to say about a read-only buffer that holds no markers.
+    return 0, nil
+  end
+
+  if not vim.bo[buf].modifiable or vim.bo[buf].readonly then
+    local name = vim.api.nvim_buf_get_name(buf)
+    return 0, (name ~= "" and vim.fn.fnamemodify(name, ":.") or "buffer") .. " is not modifiable"
+  end
+
+  -- Bottom-up, so a deletion does not shift the lines still to be removed.
+  for i = #hits, 1, -1 do
+    vim.api.nvim_buf_set_lines(buf, hits[i] - 1, hits[i], false, {})
+  end
+  return #hits, nil
+end
+
+--- Every file in the repo that might hold a marker.
+---
+--- Loaded buffers cover the ones this session inserted into (`insert()` loads
+--- its target and leaves it unsaved). `git grep` finds the ones written in an
+--- earlier session, including untracked files, and is skipped outside a repo.
+--- Buffers from *other* projects stay out of it: a repo-wide sweep is this
+--- repo's, not everything nvim happens to have open.
+---@param marker string
+---@return integer[] bufs
+local function sweep_targets(marker)
+  local root = context.git_root()
+
+  local seen, bufs = {}, {}
+  local function add(buf)
+    if buf and not seen[buf] and vim.api.nvim_buf_is_valid(buf) then
+      seen[buf] = true
+      table.insert(bufs, buf)
+    end
+  end
+
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(buf)
+    if
+      vim.api.nvim_buf_is_loaded(buf)
+      and vim.bo[buf].buftype == ""
+      and name ~= ""
+      and (not root or vim.startswith(name, root .. "/"))
+    then
+      add(buf)
+    end
+  end
+
+  if not root then
+    return bufs
+  end
+
+  local ok, res = pcall(function()
+    return vim
+      .system({ "git", "-C", root, "grep", "--untracked", "-l", "-F", "-e", marker .. ":" }, { text = true })
+      :wait(5000)
+  end)
+  -- git grep exits 1 when nothing matched, which is not an error.
+  if not ok or (res.code ~= 0 and res.code ~= 1) then
+    return bufs
+  end
+
+  for _, rel in ipairs(vim.split(res.stdout or "", "\n", { trimempty = true })) do
+    local path = root .. "/" .. rel
+    if vim.fn.filereadable(path) == 1 then
+      local buf = vim.fn.bufadd(path)
+      vim.fn.bufload(buf)
+      add(buf)
+    end
+  end
+  return bufs
+end
+
+--- Clear markers across the whole repo.
+---@return integer removed, integer buffers, string[] errors
+function M.clear_all()
+  local marker = require("mentor.config").get().learning.marker
+  local removed, touched, errors = 0, 0, {}
+  for _, buf in ipairs(sweep_targets(marker)) do
+    local n, err = M.clear(buf)
+    if n > 0 then
+      removed = removed + n
+      touched = touched + 1
+    elseif err then
+      table.insert(errors, err)
+    end
+  end
+  return removed, touched, errors
+end
+
 ---@param items table[]
 ---@return integer inserted, string[] errors
 function M.insert_all(items)

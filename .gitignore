@@ -1,2 +1,12 @@
 # Machine-local Claude Code permission grants
 .claude/settings.local.json
+
+# Secrets never belong in the tree; the openai_compat backend reads its key
+# from the environment (`api_key_env`), so a .env here would only ever be a
+# slip. MENTOR.md is deliberately absent: the project brief is meant to ship.
+.env
+.env.*
+
+# Test output; `make test` writes nothing here today, but a stray log should
+# not be one `git add .` away from being published.
+*.log

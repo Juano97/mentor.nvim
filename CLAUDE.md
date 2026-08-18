@@ -124,9 +124,16 @@ this line.
 wraps whatever is at the repo root, and that file is not vetted. Putting it in
 the system slot would let a stray line in someone's `CLAUDE.md` sit downstream of
 the pedagogy rules and override them. It goes in once per conversation, keyed by
-`session.state.briefed_root` — re-sent after `:MentorReset`, on a backend switch,
-and when the root changes mid-session, because the root follows the last code
-buffer rather than cwd.
+`session.state.briefed_root` *and* `briefed_stamp`, a hash of the text — re-sent
+after `:MentorReset`, on a backend switch, when the root changes mid-session
+(the root follows the last code buffer rather than cwd), and when the file
+itself is edited. The root alone cannot tell "same file, new contents", which is
+why the hash exists; it is taken over `brief.text`, i.e. after truncation, so it
+tracks what was actually sent rather than what is on disk. A re-send passes
+`updated` to `prompts.brief` and says it replaces the earlier copy — both are in
+the history, and nothing can be unsent. `conv.briefed_stamp` rides along in the
+saved record; an older record without one re-sends once on resume, which is the
+right way for that to fail.
 
 **A conversation is saved per turn, not on exit.** `session.remember` writes the
 whole record every time a turn completes, because nvim does not always get to

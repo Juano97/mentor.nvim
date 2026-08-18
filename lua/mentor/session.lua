@@ -14,6 +14,7 @@ M.state = {
   provider_state = {}, -- session_id (CLI) or message history (HTTP)
   pending_selection = nil, -- code attached to the next message
   briefed_root = nil, -- repo whose project brief this conversation has seen
+  briefed_stamp = nil, -- ...and a hash of the version that went in
   shown_model = nil, -- model named in the transcript most recently
   conversation = nil, -- the saved record this conversation writes to
 }
@@ -53,6 +54,7 @@ local function remember(root, name, echo)
   conv.provider_state = M.state.provider_state
   conv.model = cfg[name] and cfg[name].model or nil
   conv.briefed = M.state.briefed_root
+  conv.briefed_stamp = M.state.briefed_stamp
   conv.lines = ui.lines()
 
   store.save(cfg.history, conv)
@@ -81,21 +83,35 @@ local function send(prompt, echo, opts)
   if M.state.provider_name and M.state.provider_name ~= name then
     M.state.provider_state = {}
     M.state.briefed_root = nil
+    M.state.briefed_stamp = nil
   end
   M.state.provider_name = name
 
   local root = context.git_root() or vim.fn.getcwd()
 
-  -- The project brief goes in once per conversation, and again if you move to
-  -- another repo mid-session: the root follows the last code buffer, not cwd.
+  -- The project brief goes in once per conversation, again if you move to
+  -- another repo mid-session (the root follows the last code buffer, not cwd),
+  -- and again if the file itself is edited. That last one needs the hash: the
+  -- root alone cannot tell "same file, new contents", which is why editing a
+  -- brief used to do nothing until :MentorReset. It is taken over `brief.text`,
+  -- i.e. after truncation, so it tracks what was actually sent -- an edit below
+  -- `max_brief_lines` that the model never saw does not spend a turn re-sending.
+  --
   -- A side request carrying its own state (:MentorInit) is not a conversation
   -- and gets none of this.
   local briefing = nil
   if not opts.state then
     local brief = require("mentor.brief").read(cfg.context)
-    if brief and M.state.briefed_root ~= root then
-      briefing = root
-      prompt = prompts.brief(brief) .. "\n\n" .. prompt
+    if brief then
+      local stamp = vim.fn.sha256(brief.text)
+      local refresh = cfg.context.project_brief_refresh ~= false
+      local stale = refresh and M.state.briefed_stamp ~= stamp
+      if M.state.briefed_root ~= root or stale then
+        -- Same repo means it was already sent once, so this copy supersedes
+        -- rather than introduces. Moving to another repo introduces.
+        briefing = { root = root, stamp = stamp }
+        prompt = prompts.brief(brief, M.state.briefed_root == root) .. "\n\n" .. prompt
+      end
     end
   end
 
@@ -147,7 +163,8 @@ local function send(prompt, echo, opts)
       -- Only mark the brief as delivered once something came back: a request
       -- that died before the backend answered never recorded it either.
       if briefing and got_output then
-        M.state.briefed_root = briefing
+        M.state.briefed_root = briefing.root
+        M.state.briefed_stamp = briefing.stamp
       end
       if not got_output then
         ui.append("(no response)\n")
@@ -337,6 +354,7 @@ function M.reset()
   M.state.provider_name = nil
   M.state.pending_selection = nil
   M.state.briefed_root = nil -- the next conversation gets the brief again
+  M.state.briefed_stamp = nil
   M.state.shown_model = nil -- ...and re-states which model is answering
   M.state.conversation = nil -- ...and is saved as a conversation of its own
   ui.set_pending(nil)
@@ -360,6 +378,10 @@ local function restore(conv)
   M.state.provider_state = conv.provider_state or {}
   M.state.provider_name = conv.provider
   M.state.briefed_root = conv.briefed -- it has already been told, once
+  -- Records written before briefs were versioned have no stamp, so the next
+  -- turn re-sends once. Resuming a thread whose brief may have moved on since
+  -- is exactly when that is the right call.
+  M.state.briefed_stamp = conv.briefed_stamp
   M.state.shown_model = conv.model
   M.state.pending_selection = nil
   M.state.conversation = conv

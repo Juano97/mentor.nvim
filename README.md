@@ -299,8 +299,15 @@ for an agent that does the work; a tutor's brief wants different things in it, a
 overwriting the file your coding agent owns is a bad surprise. Existing ones are
 read, never written.
 
-Turn reading off with `context = { project_brief = false }`. `:MentorInit` still
-refuses to overwrite a file that is there.
+Editing the brief takes effect on the next question: the file is re-read every
+turn, and when its contents have changed the new version is sent again, marked
+as replacing the copy the conversation already has. An unchanged file is never
+re-sent, so a `:w` that changed nothing costs nothing. Set
+`context = { project_brief_refresh = false }` to freeze the brief for the length
+of a conversation instead.
+
+Turn reading off entirely with `context = { project_brief = false }`.
+`:MentorInit` still refuses to overwrite a file that is there.
 
 ## Configure
 
@@ -327,6 +334,9 @@ require("mentor").setup({
     -- Searched at the repo root; the first entry is what :MentorInit drafts.
     project_brief_files = { "MENTOR.md", "CLAUDE.md", "AGENTS.md" },
     max_brief_lines = 200,
+    -- Re-send it mid-conversation when the file changes; false freezes the
+    -- copy sent at the start.
+    project_brief_refresh = true,
   },
 
   -- Saved conversations, for :MentorResume. save=false keeps them in memory.
@@ -407,7 +417,7 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 | `ui_spec` | Busy winbar and spinner, selection attach/clear, range clamping |
 | `todo_spec` | TODO parsing, last-block scoping, the on/off toggle |
 | `model_spec` | Model selection per backend, runtime switching, transcript labelling |
-| `brief_spec` | Brief discovery and precedence, sent once per conversation, `:MentorInit` drafting to a buffer and not to disk |
+| `brief_spec` | Brief discovery and precedence, sent once per conversation and again when edited, `:MentorInit` drafting to a buffer and not to disk |
 | `history_spec` | Saving a conversation per turn, resuming one, pruning, a session the backend dropped |
 | `commentstring_spec` | Comment syntax per language, indentation, bottom-up ordering |
 | `e2e_spec` | Live round-trip; asserts the model changed nothing on disk |
@@ -416,11 +426,12 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 offline specs assert on the exact prompt and system prompt sent without touching
 the network.
 
-## Known gaps
+## A note on process-per-turn
 
-- Each turn spawns a fresh `claude` process and resumes by session id, costing
-  ~1–2s of startup. A persistent process using `--input-format stream-json`
-  would remove that.
-- The project brief is re-read from disk on each new conversation but not while
-  one is running, so editing it mid-conversation has no effect until
-  `:MentorReset`.
+Each turn spawns a fresh `claude` and resumes by session id, which costs ~1–2s
+of startup. A persistent process over `--input-format stream-json` would remove
+that, and it is deliberately not done: the current shape is what makes `cwd`,
+the model and the sandbox flags per-turn arguments, so moving between repos or
+running `:MentorModel` needs no session invalidation, and `:MentorStop` can be a
+plain `SIGTERM`. Against a turn the model spends ten seconds thinking about,
+the startup is not worth those four moving parts.

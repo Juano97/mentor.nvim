@@ -80,6 +80,82 @@ session.ask("after reset")
 settle()
 h.check("reset sends it again", get().prompt:find("<project_brief>", 1, true) ~= nil)
 
+------------------------------------------------------------------ a stale copy
+
+-- Editing the brief mid-conversation used to do nothing until :MentorReset:
+-- the gate was the repo root, which cannot tell "same file, new contents".
+session.ask("still the same file")
+settle()
+h.check("an untouched brief is not re-sent",
+  get().prompt:find("<project_brief>", 1, true) == nil)
+
+vim.fn.writefile({ "# Cart", "", "A teaching fixture, revised." }, dir .. "/MENTOR.md")
+session.ask("after the edit")
+settle()
+req = get()
+h.check("an edited brief goes in again",
+  req.prompt:find("<project_brief>", 1, true) ~= nil)
+h.check("...carrying the new text", req.prompt:find("revised", 1, true) ~= nil)
+-- The first copy is still in the history and cannot be unsent, so the second
+-- has to say which one wins.
+h.check("...and says it replaces the copy already sent",
+  req.prompt:find("replaces that copy", 1, true) ~= nil, req.prompt)
+
+session.ask("and on from there")
+settle()
+h.check("the new version settles too",
+  get().prompt:find("<project_brief>", 1, true) == nil)
+
+-- `:w` with no edit, or a formatter rewriting the file, must not spend tokens.
+vim.fn.writefile({ "# Cart", "", "A teaching fixture, revised." }, dir .. "/MENTOR.md")
+session.ask("rewritten byte for byte")
+settle()
+h.check("an identical rewrite is not re-sent",
+  get().prompt:find("<project_brief>", 1, true) == nil)
+
+-- The hash is over what is actually sent, which is the text after truncation.
+-- So an edit below the cut is invisible to the model and costs nothing here —
+-- the line count is part of the marker, so this holds while it stays the same.
+local function padded(tail)
+  local lines = { "# Cart", "", "A teaching fixture." }
+  for i = 1, 40 do
+    lines[#lines + 1] = tail .. " " .. i
+  end
+  return lines
+end
+
+require("mentor").setup({ context = { max_brief_lines = 3 } })
+session.reset()
+vim.fn.writefile(padded("filler"), dir .. "/MENTOR.md")
+session.ask("with a truncated brief")
+settle()
+req = get()
+h.check("the truncated brief goes in", req.prompt:find("<project_brief>", 1, true) ~= nil)
+h.check("...cut at max_brief_lines",
+  req.prompt:find("truncated 40 more", 1, true) ~= nil, req.prompt)
+
+vim.fn.writefile(padded("rewritten well below the cut"), dir .. "/MENTOR.md")
+session.ask("edited out of sight")
+settle()
+h.check("an edit the model never saw is not re-sent",
+  get().prompt:find("<project_brief>", 1, true) == nil)
+
+-- Off switch: the copy sent at the start stands for the whole conversation.
+require("mentor").setup({ context = { project_brief_refresh = false } })
+session.reset()
+vim.fn.writefile({ "# Cart", "", "Original." }, dir .. "/MENTOR.md")
+session.ask("refresh off, first")
+settle()
+h.check("it still goes in once", get().prompt:find("<project_brief>", 1, true) ~= nil)
+vim.fn.writefile({ "# Cart", "", "Edited." }, dir .. "/MENTOR.md")
+session.ask("refresh off, after an edit")
+settle()
+h.check("project_brief_refresh=false ignores the edit",
+  get().prompt:find("<project_brief>", 1, true) == nil)
+
+require("mentor").setup({})
+session.reset()
+
 -------------------------------------------------------------------- MentorInit
 
 -- A brief already exists: refuse rather than overwrite.

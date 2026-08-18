@@ -96,13 +96,17 @@ M.defaults = {
     max_selection_lines = 200,
 
     -- Project brief: a file at the repo root saying what this project is, sent
-    -- once at the start of a conversation so the mentor is not inferring the
-    -- whole codebase from one diff. Set false to never look for one.
+    -- at the start of a conversation so the mentor is not inferring the whole
+    -- codebase from one diff. Set false to never look for one.
     project_brief = true,
     -- Searched at the repo root, first hit wins. The first entry doubles as
     -- what :MentorInit drafts; the rest are read but never written.
     project_brief_files = { "MENTOR.md", "CLAUDE.md", "AGENTS.md" },
     max_brief_lines = 200,
+    -- Re-send the brief when the file changes mid-conversation, so an edit
+    -- takes effect without :MentorReset. False keeps the copy sent at the
+    -- start of the conversation for its whole length.
+    project_brief_refresh = true,
   },
 
   ---------------------------------------------------------------------------

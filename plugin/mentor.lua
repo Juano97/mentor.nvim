@@ -35,6 +35,10 @@ cmd("MentorInit", function()
   require("mentor").init()
 end, { desc = "Draft a project brief for this repo (you review and save it)" })
 
+cmd("MentorRevision", function()
+  require("mentor").revise()
+end, { desc = "Draft a revision of the project brief beside it (you merge it)" })
+
 cmd("MentorModel", function(a)
   require("mentor").set_model(a.args ~= "" and a.args or nil)
 end, {

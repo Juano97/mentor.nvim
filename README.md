@@ -49,6 +49,7 @@ Then `:checkhealth mentor` to confirm the backend and the sandbox settings.
 | `:MentorAsk [text]` | `<leader>ma` | Ask a question; prompts if you give no text |
 | `:MentorReview` | `<leader>mr` | Review your most recent changes |
 | `:MentorInit` | — | Draft a project brief for this repo; you review and save it |
+| `:MentorRevision` | — | Draft a revision of that brief beside it; you diff and merge it |
 | `:MentorModel [name]` | — | Show or switch the model; no argument reports the current one |
 | `:MentorStop` | `<leader>ms` | Cancel the answer in flight |
 | `:MentorReset` | `<leader>mx` | Drop the conversation and clear the panel |
@@ -79,15 +80,22 @@ spinner and `thinking… :MentorStop` while a reply streams, plus `[cart.py:4-9]
 when a selection is attached.
 
 The box takes commands as well as questions, so the usual ones do not cost you a
-trip to `:`— type `/help` in it for the list:
+trip to `:`. Typing `/` at the start of an empty line pops up the list — `<C-n>`
+and `<C-p>` walk it, `<C-y>` takes one — or type `/help` to have it written into
+the transcript:
 
 | Typed in the box | Does |
 |---|---|
 | `/resume` | Pick the most recent conversation back up |
 | `/resume 2` | …or the second most recent |
 | `/resume list` | Choose from all of them |
+| `/revise` | Draft a revision of the project brief |
 | `/reset` | Start a new conversation |
 | `/stop` | Cancel the answer in flight |
+
+The popup only appears when the slash is the line's first character, so a slash
+inside a question is just punctuation. Set `window = { complete_commands = false
+}` if you have your own completion bound to `/`.
 
 Anything else starting with `/` that is not a command is refused rather than
 sent, and your text stays in the box — a mistyped `/resume` costs a correction,
@@ -294,6 +302,48 @@ same bargain as `TODO(human)`: the plugin does the mechanical part, you decide
 what is kept. It also refuses to run when a brief already exists — replacing one
 is a job for you and your editor.
 
+### Updating one
+
+The brief is a file you own, so the usual answer is to edit it: the next question
+picks the change up on its own (see below). When you would rather have the model
+propose the update, `:MentorRevision` — or `/revise` in the input box — drafts one
+*beside* the brief instead of over it:
+
+```
+:MentorRevision
+  → mentor re-reads the project and the brief it already has
+  → MENTOR.md.new fills in as it streams, unsaved
+  → when it lands, the two open side by side in diff mode,
+    cursor in MENTOR.md
+  → ]c to the next change, do to take it, :w when you are happy
+  → :q! the revision — it was never a file
+```
+
+**`:w` is not how you finish a revision.** Saving `MENTOR.md.new` would leave you
+two briefs and the merge still to do. The revision is a source to take hunks
+from, not a file to keep: `do` (diff obtain) pulls one into `MENTOR.md`, `dp`
+pushes one the other way, and the save you make at the end is a save of the real
+brief, by hand, in the window you were reading. Then `:q!` the revision and
+nothing extra ever reached disk. The winbar over the draft says exactly this
+while you work.
+
+Want the whole thing? `:sav! MENTOR.md` from the revision buffer replaces the
+brief outright — still your keystroke, still your call.
+
+Set `context = { project_brief_diff = false }` to get the draft in a plain split
+and run `:vert diffsplit MENTOR.md` yourself. Closing the revision turns diff
+mode back off in the window it opened.
+
+Same bargain as `:MentorInit` and the same refusals: it will not run when there
+is no brief to revise (that is `:MentorInit`), when an unsaved revision is
+already open, or when a `MENTOR.md.new` is sitting on disk from last time. Your
+`MENTOR.md` is never written by the plugin — merging the two is yours, and
+`.new` is not a filename it will ever read as a brief.
+
+Unlike the copy sent with each conversation, the revision is handed the brief
+*whole*, ignoring `max_brief_lines` — a model revising a document it only saw
+three quarters of would hand one back with the last quarter deleted.
+
 It drafts `MENTOR.md` rather than `CLAUDE.md` on purpose. A `CLAUDE.md` is written
 for an agent that does the work; a tutor's brief wants different things in it, and
 overwriting the file your coding agent owns is a bad surprise. Existing ones are
@@ -307,7 +357,9 @@ re-sent, so a `:w` that changed nothing costs nothing. Set
 of a conversation instead.
 
 Turn reading off entirely with `context = { project_brief = false }`.
-`:MentorInit` still refuses to overwrite a file that is there.
+`:MentorInit` still refuses to overwrite a file that is there, and
+`:MentorRevision` still revises it — that switch is about what every conversation
+carries, not about a document you asked for by name.
 
 ## Configure
 
@@ -317,8 +369,9 @@ Defaults live in `lua/mentor/config.lua`. Common changes:
 require("mentor").setup({
   -- focus_on_open=false makes :Mentor only reveal the panel, cursor unmoved.
   -- scroll_past_end=true drops the clamp on the transcript's last line.
+  -- complete_commands=false gives `/` back to your own completion.
   window = { width = 0.25, input_height = 5, focus_on_open = true,
-    scroll_past_end = false },
+    scroll_past_end = false, complete_commands = true },
 
   -- Let it read the codebase but nothing else. Set `tools = {}` for pure chat.
   claude_cli = {
@@ -417,7 +470,7 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 | `ui_spec` | Busy winbar and spinner, selection attach/clear, range clamping |
 | `todo_spec` | TODO parsing, last-block scoping, the on/off toggle |
 | `model_spec` | Model selection per backend, runtime switching, transcript labelling |
-| `brief_spec` | Brief discovery and precedence, sent once per conversation and again when edited, `:MentorInit` drafting to a buffer and not to disk |
+| `brief_spec` | Brief discovery and precedence, sent once per conversation and again when edited, `:MentorInit` drafting to a buffer and not to disk, `:MentorRevision` drafting beside it |
 | `history_spec` | Saving a conversation per turn, resuming one, pruning, a session the backend dropped |
 | `commentstring_spec` | Comment syntax per language, indentation, bottom-up ordering |
 | `e2e_spec` | Live round-trip; asserts the model changed nothing on disk |

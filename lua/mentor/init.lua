@@ -61,6 +61,11 @@ function M.init()
   session.init()
 end
 
+--- Draft a revision of the existing brief, into a file beside it.
+function M.revise()
+  session.revise()
+end
+
 --- Point the active backend at a different model, from the next turn on.
 ---@param name string|nil omit to report the current one; "default" to unset
 ---@return string|nil model

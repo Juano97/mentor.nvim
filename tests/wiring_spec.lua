@@ -17,7 +17,7 @@ local cmds = vim.api.nvim_get_commands({})
 for _, name in ipairs({
   "Mentor", "MentorAsk", "MentorReview", "MentorStop",
   "MentorReset", "MentorTodos", "MentorTodoInsert", "MentorTodoClear",
-  "MentorInit", "MentorModel",
+  "MentorInit", "MentorRevision", "MentorModel",
 }) do
   h.check("command :" .. name, cmds[name] ~= nil)
 end

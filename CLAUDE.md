@@ -76,6 +76,37 @@ stays a question; a slash-word that is *not* a command is refused and left in th
 box rather than spent as a turn. `submit` returns whether it took the text, and
 that boolean is what tells the box whether to clear.
 
+`COMMANDS` has three readers — `submit` dispatches on it, `/help` prints it, and
+`ui.complete_command` completes from it — so each entry carries its own `desc`
+and a new command needs adding in exactly one place. A hand-written list
+anywhere else is the one that goes stale; that is why `/help` renders the table
+rather than reciting it. The completion offers bare names only: `/resume list`
+is an argument, and `entry.forms` exists so `/help` can show the spellings
+without the menu inviting you to pick one. Both readers sort, because `pairs`
+does not, and a list that reshuffles between calls cannot be skimmed.
+
+`complete_command` is a `completefunc` (not `omnifunc` — an LSP setup has
+usually taken that), and it applies the same first-word guard as `submit`,
+returning `-1` past it so completion falls through to whatever the user has
+wired up. The `/` that opens it is an insert-mode `expr` map that fires only at
+column 1.
+
+**The menu borrows `completeopt` and hands it straight back.** Vim's default
+inserts the first match the moment a popup opens, which turns a bare `/` into
+`/help` and the next keystroke into `/helpre`. `noinsert` (plus `menuone`, so a
+narrowed-down single command still shows) is what makes the menu a menu. It
+cannot just be set: `completeopt` is global until nvim 0.11 and this plugin
+supports 0.10, so `borrow_completeopt` saves the user's value and a
+`CompleteDone`/`InsertLeave` autocmd returns it. Never drop that autocmd — the
+option would stay changed for every other buffer in the session.
+
+None of that keystroke path is assertable headlessly, so `input_spec` calls
+`complete_command` directly and checks the map and the restore autocmd are
+registered — the same split as the scroll clamp above. The behaviour itself was
+driven over `--listen` + `--remote-send`, which is the way to check it again:
+`complete_info()` and `getline(".")` after each key tell you what a real user
+would see, and it is how the auto-insert bug was found in the first place.
+
 **The scroll clamp has to run a tick late.** `WinScrolled` on the transcript
 window pulls the view back so the last line stays on the bottom row. Correcting
 inside the callback works for `<C-e>` and silently does nothing for `<C-f>`,
@@ -111,6 +142,38 @@ for a file that does not exist yet (`brief.open_draft`), so `:w` keeps it and
 `:q!` discards it. Never make that path write the file directly, and never let it
 target a file that already exists. Prose is the limit: this is not a licence to
 write code.
+
+`:MentorRevision` is that same path pointed at a brief that already exists, and
+the way it keeps the last rule is by writing somewhere else:
+`brief.revision_path` returns `MENTOR.md.new`, and `session.revise` refuses when
+even *that* is on disk. The two commands share `session.draft`, so the
+buffer-not-file bargain, the winbar and the cleanup have one implementation;
+they differ in the prompt and in mirrored guards — `init` refuses when a brief
+exists, `revise` refuses when none does. A revision that edited `MENTOR.md` in
+place would be the exact thing this section forbids, however convenient it
+sounds, and `.new` stays out of `project_brief_files` so a draft left lying
+around is never read back as the brief.
+
+**A revision does not end in `:w`.** The one thing that carried over wrong from
+`init` was its advice: saving a draft is how you finish a file that did not
+exist, and it is not how you finish a revision of one that does — you would have
+two briefs and the merge still ahead of you. So `revise` passes `on_drafted`,
+which puts the two side by side (`brief.open_diff`, a `:diffsplit` into a window
+of our own so a window someone already had on the brief keeps its options) and
+labels the draft with `brief.mark_merge` instead of `mark_done`. The cursor is
+left in the *brief*, not the revision: `do` pulls a hunk out of the draft, and
+the `:w` at the end is a save of the real file, by hand, which is the whole
+model this plugin runs on. Closing the revision turns diff mode off again in
+the window it opened — we changed fold and wrap settings there, so we undo them.
+`context.project_brief_diff = false` opts out and the winbar names the manual
+`:vert diffsplit` instead.
+
+The revision is handed the brief through `brief.read_whole`, which deliberately
+ignores `max_brief_lines`: truncating here would have the model revise a
+document it cannot see the end of and hand back one with the tail silently
+deleted. It rides in the *user* turn wrapped in `<project_brief>` like every
+other copy — being the subject of the request makes that framing more important,
+not less.
 
 The one automatic write is `store.lua`, and it is deliberately outside the
 project: saved conversations go to `stdpath("state")/mentor/<repo>/`, mode 0600,

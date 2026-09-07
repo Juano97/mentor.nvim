@@ -215,6 +215,62 @@ function M.ensure_buf()
   return buf
 end
 
+-- The user's own `completeopt`, held while the command menu is up.
+local saved_completeopt = nil
+
+--- Show the menu without writing into the buffer.
+---
+--- Vim's default `completeopt` inserts the first match as soon as the popup
+--- opens, so a bare `/` would become `/help` and the next keystroke would land
+--- on the end of it. `noinsert` leaves the text alone until you pick one, and
+--- `menuone` keeps the menu up when your typing has narrowed it to a single
+--- command. Neither is ours to set permanently: 'completeopt' is global until
+--- nvim 0.11 and this plugin supports 0.10, so it is borrowed and handed back.
+local function borrow_completeopt()
+  if saved_completeopt == nil then
+    saved_completeopt = vim.o.completeopt
+  end
+  vim.o.completeopt = "menu,menuone,noinsert"
+end
+
+local function return_completeopt()
+  if saved_completeopt ~= nil then
+    vim.o.completeopt = saved_completeopt
+    saved_completeopt = nil
+  end
+end
+
+--- `completefunc` for the input box: the panel commands, offered while the
+--- line is nothing but a leading slash-word.
+---
+--- The guard is the same one `session.submit` applies, and for the same
+--- reason: `/usr/bin/env, what is that?` is a question about a path. A menu
+--- that popped up there would be answering a question nobody asked, so
+--- anything past the first word returns -1 and completion falls through to
+--- whatever the user has wired up.
+---
+--- Called by Vim with (1, "") to find the start column, then (0, base) for the
+--- matches.
+---@param findstart integer 1 = report where the word begins
+---@param base string what has been typed so far
+---@return integer|table[] column when findstart, else the candidate list
+function M.complete_command(findstart, base)
+  local line = vim.api.nvim_get_current_line()
+
+  if findstart == 1 then
+    -- Byte offset of the `/`, or -1 to leave completion to someone else.
+    return line:match("^/[%w_-]*$") and 0 or -1
+  end
+
+  local items = {}
+  for _, item in ipairs(require("mentor.session").commands()) do
+    if vim.startswith(item.word, base) then
+      items[#items + 1] = item
+    end
+  end
+  return items
+end
+
 ---@return integer bufnr
 function M.ensure_input_buf()
   if valid_buf(M.state.input_buf) then
@@ -246,6 +302,33 @@ function M.ensure_input_buf()
       vim.api.nvim_set_current_win(M.state.win)
     end
   end, vim.tbl_extend("force", opts, { desc = "Mentor: back to transcript" }))
+
+  -- `completefunc` rather than `omnifunc`: an LSP setup has usually claimed
+  -- omni already, and this buffer is not a file anyone's server knows about.
+  if require("mentor.config").get().window.complete_commands ~= false then
+    vim.bo[buf].completefunc = "v:lua.require'mentor.ui'.complete_command"
+
+    -- Typing the slash opens the menu, but only as the first character of the
+    -- line — the one place a slash can begin a command. Everywhere else it is
+    -- punctuation in a question and stays a plain keystroke.
+    vim.keymap.set("i", "/", function()
+      if vim.fn.col(".") ~= 1 then
+        return "/"
+      end
+      borrow_completeopt()
+      return "/<C-x><C-u>"
+    end, vim.tbl_extend("force", opts, { expr = true, desc = "Mentor: complete command" }))
+
+    -- Whatever the user's `completeopt` was, it comes back the moment the menu
+    -- closes — CompleteDone fires on accept and on abort alike. InsertLeave is
+    -- the belt: <C-c> out of a menu leaves no CompleteDone behind.
+    vim.api.nvim_create_autocmd({ "CompleteDone", "InsertLeave" }, {
+      group = vim.api.nvim_create_augroup("mentor_complete", { clear = true }),
+      buffer = buf,
+      callback = return_completeopt,
+      desc = "Mentor: restore completeopt",
+    })
+  end
 
   M.state.input_buf = buf
   return buf

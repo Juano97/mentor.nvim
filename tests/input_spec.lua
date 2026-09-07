@@ -115,14 +115,85 @@ h.check("an unknown command is not sent to the model", captured == nil)
 h.eq("...it is reported", warned, 1)
 h.eq("...and the text stays put", input_text(), "/resune")
 
+local revised = false
+local real_revise = session.revise
+session.revise = function() revised = true end
+type_in("/revise")
+session.revise = real_revise
+h.check("/revise drafts a brief revision", revised)
+
 type_in("/help")
-h.check("/help lists the commands",
-  table.concat(ui.lines(), "\n"):find("/resume list", 1, true) ~= nil)
+local help = table.concat(ui.lines(), "\n")
+h.check("/help lists the commands", help:find("/resume list", 1, true) ~= nil, help)
+h.check("...every one of them", help:find("/stop", 1, true) ~= nil, help)
+h.check("...with what they do", help:find("cancel the answer in flight", 1, true) ~= nil, help)
 
 session.resume = real_resume
 
+---------------------------------------------------------- command completion
+
+-- The popup itself is insert mode and not assertable headlessly; what is
+-- checkable is the function behind it, which is where the decisions live. The
+-- interaction was verified against a real nvim over --listen + --remote-send:
+-- `/` leaves the line at `/` and lists all four, typing narrows the highlight
+-- without touching the text, <C-n> inserts, and completeopt comes back after.
+h.eq("the input box has a completefunc",
+  vim.bo[ui.state.input_buf].completefunc, "v:lua.require'mentor.ui'.complete_command")
+h.check("/ opens it from insert mode", has_map(ui.state.input_buf, "i", "/"))
+-- The borrow is only safe because something always hands completeopt back.
+h.eq("completeopt is restored when the menu closes", #vim.api.nvim_get_autocmds({
+  group = "mentor_complete", buffer = ui.state.input_buf }), 2)
+
+ui.focus_input()
+vim.cmd("stopinsert")
+
+local function findstart(line)
+  vim.api.nvim_buf_set_lines(ui.state.input_buf, 0, -1, false, { line })
+  return ui.complete_command(1, "")
+end
+
+h.eq("a bare slash completes", findstart("/"), 0)
+h.eq("a half-typed name completes", findstart("/re"), 0)
+-- The same guard submit applies: past the first word it is prose.
+h.eq("a path does not", findstart("/usr/bin/env, what is that?"), -1)
+h.eq("a slash mid-sentence does not", findstart("how do I /reset"), -1)
+h.eq("a finished command does not", findstart("/resume list"), -1)
+
+local function words(base)
+  local out = {}
+  for _, item in ipairs(ui.complete_command(0, base)) do
+    out[#out + 1] = item.word
+  end
+  return out
+end
+
+local all = words("/")
+h.check("every command is offered", vim.tbl_contains(all, "/help")
+  and vim.tbl_contains(all, "/reset") and vim.tbl_contains(all, "/resume")
+  and vim.tbl_contains(all, "/stop"), table.concat(all, " "))
+h.check("in a stable order", vim.deep_equal(all, words("/")), table.concat(all, " "))
+h.eq("prefixes narrow it", table.concat(words("/res"), " "), "/reset /resume")
+h.eq("...on the shared prefix too", table.concat(words("/re"), " "),
+  "/reset /resume /revise")
+h.eq("...to nothing when nothing matches", #words("/zz"), 0)
+h.eq("argument forms stay out of the menu", #words("/resume "), 0)
+
+local first = ui.complete_command(0, "/st")[1]
+h.eq("each carries its description", first and first.menu, "cancel the answer in flight")
+
+vim.api.nvim_buf_set_lines(ui.state.input_buf, 0, -1, false, { "" })
+
 ui.close()
 h.check("close tears down both windows", not ui.win_valid() and not ui.input_win_valid())
+
+-- Someone with their own completion on `/` needs the key back.
+vim.api.nvim_buf_delete(ui.state.input_buf, { force = true })
+cfg.window.complete_commands = false
+local plain = ui.ensure_input_buf()
+h.eq("complete_commands=false leaves completefunc alone", vim.bo[plain].completefunc, "")
+h.check("...and / stays a plain keystroke", not has_map(plain, "i", "/"))
+cfg.window.complete_commands = true
+vim.api.nvim_buf_delete(plain, { force = true })
 
 ---------------------------------------------------------------- toggle focus
 

@@ -17,6 +17,9 @@ M.defaults = {
     -- The transcript stops at its last line instead of scrolling on into the
     -- empty rows below it. Set true for stock Vim scrolling.
     scroll_past_end = false,
+    -- Typing `/` at the start of the input box pops up the panel commands.
+    -- Set false if you have your own completion wired to the same key.
+    complete_commands = true,
   },
 
   ---------------------------------------------------------------------------
@@ -107,6 +110,10 @@ M.defaults = {
     -- takes effect without :MentorReset. False keeps the copy sent at the
     -- start of the conversation for its whole length.
     project_brief_refresh = true,
+    -- :MentorRevision puts its draft in a diff against the brief it revises,
+    -- because merging the two is the point and `:w` on the draft is not. Set
+    -- false to get the draft in a plain split and diff it yourself.
+    project_brief_diff = true,
   },
 
   ---------------------------------------------------------------------------

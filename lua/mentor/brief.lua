@@ -74,6 +74,48 @@ function M.target_path(cfg)
   return root .. "/" .. name, name
 end
 
+--- Where :MentorRevision writes: beside the brief it revises, never over it.
+---
+--- A revision is a document you read against the one you have, so it has to be
+--- a second file. `.new` is not in `project_brief_files`, so a draft left lying
+--- around is never mistaken for the brief itself.
+---@param cfg table context config
+---@return string|nil path, string|nil name, table|nil source the brief revised
+function M.revision_path(cfg)
+  local found = M.find(cfg)
+  if not found then
+    return nil, nil, nil
+  end
+  return found.path .. ".new", found.name .. ".new", found
+end
+
+--- The brief as it stands, for a revision to work from.
+---
+--- Whole, unlike `read`: `max_brief_lines` keeps a per-conversation cost down,
+--- but a model asked to revise a document it was shown three quarters of would
+--- hand back a document with the last quarter deleted. Ignores
+--- `project_brief = false` for the same reason `find` does — that switch is
+--- about what every conversation carries, not about a revision you asked for.
+---@param cfg table context config
+---@return table|nil { name, text, path }
+function M.read_whole(cfg)
+  local found = M.find(cfg)
+  if not found then
+    return nil
+  end
+
+  local ok, lines = pcall(vim.fn.readfile, found.path)
+  if not ok or type(lines) ~= "table" then
+    return nil
+  end
+  local text = vim.trim(table.concat(lines, "\n"))
+  if text == "" then
+    return nil
+  end
+
+  return { name = found.name, text = text, path = found.path }
+end
+
 --- An unsaved draft already open for `path`, if any. Re-running :MentorInit
 --- must not wipe a draft you have started editing — the file is not on disk, so
 --- the buffer is the only copy.
@@ -122,6 +164,66 @@ end
 ---@param name string
 function M.mark_done(win, name)
   set_winbar(win, ("mentor stopped writing — `:w` keeps %s, `:q!` discards it"):format(name))
+end
+
+--- The same, for a revision, where `:w` is the wrong advice.
+---
+--- A draft of a file that does not exist is finished by saving it. A revision
+--- of a file that does, is not: saving leaves you with two briefs and the merge
+--- still to do. What you actually want is the good lines out of it and the file
+--- itself gone, so the winbar names `do`/`dp` and offers `:q!` as the ending.
+---@param win integer
+---@param target string the brief being revised
+---@param diffing boolean whether the two are already side by side
+function M.mark_merge(win, target, diffing)
+  set_winbar(win, diffing
+    and ("`do`/`dp` moves a hunk, `:w` in %s keeps it, `:q!` here discards this")
+      :format(target)
+    or ("mentor stopped writing — `:vert diffsplit %s` to compare, `:q!` discards this")
+      :format(target))
+end
+
+--- Put the finished revision side by side with the brief it revises.
+---
+--- `:diffsplit` opens the target in a window of our own, so a window someone
+--- already had on the brief keeps its options; the cursor lands in that new
+--- window, which is the right end of the diff to be at — `do` pulls a hunk out
+--- of the revision and into the file you are keeping, and `:w` there is a save
+--- of the real brief, by hand, as it should be.
+---@param win integer the revision's window
+---@param target_path string the brief being revised
+---@return boolean diffing
+function M.open_diff(win, target_path)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return false
+  end
+  vim.api.nvim_set_current_win(win)
+
+  local ok = pcall(vim.cmd, "vertical diffsplit " .. vim.fn.fnameescape(target_path))
+  if not ok then
+    return false
+  end
+  local target_win = vim.api.nvim_get_current_win()
+
+  -- Diff mode changes fold and wrap settings, and the window it changed them
+  -- in is one we opened. Closing the revision is the end of the comparison, so
+  -- it is also the end of diff mode.
+  local buf = vim.api.nvim_win_get_buf(win)
+  local group = vim.api.nvim_create_augroup("mentor_diff_" .. buf, { clear = true })
+  vim.api.nvim_create_autocmd({ "BufWinLeave", "BufUnload" }, {
+    group = group,
+    buffer = buf,
+    callback = function()
+      if vim.api.nvim_win_is_valid(target_win) then
+        vim.api.nvim_win_call(target_win, function()
+          vim.cmd("diffoff")
+        end)
+      end
+      pcall(vim.api.nvim_del_augroup_by_id, group)
+    end,
+  })
+
+  return true
 end
 
 --- Nothing but the empty line `bufload` starts with — no model text, no edits

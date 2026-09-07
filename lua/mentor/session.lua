@@ -258,11 +258,78 @@ function M.review()
   send(prompts.review(diff, label), "Review my recent changes (" .. label .. ").")
 end
 
+--- Stream a document into an unsaved buffer for `path`, and leave the keeping
+--- of it to the user.
+---
+--- Shared by `:MentorInit` and `:MentorRevision`, which differ only in what
+--- they ask for: the same buffer-not-file bargain, the same winbar, the same
+--- cleanup when nothing came back. `path` must not exist on disk — both
+--- callers check that, and it is the whole reason this streams into a buffer.
+---@param spec table { path, name, prompt, echo, note, on_drafted }
+---@return boolean started
+local function draft(spec)
+  local brief = require("mentor.brief")
+
+  local pending = brief.pending_draft(spec.path)
+  if pending then
+    notify(("an unsaved %s draft is already open — `:w` it or `:bd!` it first")
+      :format(spec.name))
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_buf(w) == pending then
+        vim.api.nvim_set_current_win(w)
+        break
+      end
+    end
+    return false
+  end
+
+  local buf, win = brief.open_draft(spec.path)
+  brief.mark_drafting(win, spec.name)
+
+  local started = send(spec.prompt, spec.echo, {
+    system = prompts.system .. prompts.brief_instructions,
+    todos = false, -- a handback section has no business inside the document
+    -- A fresh state: a whole document sitting in the history would follow the
+    -- conversation around for no benefit.
+    state = {},
+    sink = function(text)
+      brief.append(buf, text)
+    end,
+    on_done = function(got_output)
+      if got_output then
+        if spec.on_drafted then
+          spec.on_drafted(buf, win)
+        else
+          brief.mark_done(win, spec.name)
+          notify(spec.name .. " drafted — read it, then :w to keep it")
+        end
+      elseif brief.is_empty(buf) then
+        -- Nothing came back, so the split is an empty buffer for a file that
+        -- does not exist. The panel already said what went wrong; leaving the
+        -- window behind only invites you to wonder what it is.
+        brief.discard_draft(buf, win)
+      else
+        brief.mark_done(win, spec.name)
+      end
+    end,
+  })
+
+  if not started then
+    brief.discard_draft(buf, win)
+    return false
+  end
+
+  ui.append((spec.note or ("drafting into " .. spec.name ..
+    " — read it, then `:w` to keep it.")) .. "\n")
+  return true
+end
+
 --- Draft a project brief for this repo.
 ---
 --- The draft streams into an unsaved buffer; nothing reaches disk until you
 --- save it. Refuses when a brief already exists — overwriting one is a job for
---- you and your editor, not for the model.
+--- you and your editor, not for the model; `:MentorRevision` is the way to have
+--- the model propose one.
 function M.init()
   local cfg = config.get()
   local brief = require("mentor.brief")
@@ -274,7 +341,8 @@ function M.init()
 
   local existing = brief.find(cfg.context)
   if existing then
-    notify(existing.name .. " already exists — mentor reads it at the start of a conversation")
+    notify(("%s already exists — :MentorRevision drafts a revision beside it")
+      :format(existing.name))
     return
   end
 
@@ -284,50 +352,59 @@ function M.init()
     return
   end
 
-  local pending = brief.pending_draft(path)
-  if pending then
-    notify(("an unsaved %s draft is already open — `:w` it or `:bd!` it first"):format(name))
-    for _, w in ipairs(vim.api.nvim_list_wins()) do
-      if vim.api.nvim_win_get_buf(w) == pending then
-        vim.api.nvim_set_current_win(w)
-        break
-      end
-    end
+  draft({ path = path, name = name, prompt = prompts.init_brief(name),
+    echo = "Draft " .. name .. " for this project." })
+end
+
+--- Revise the brief that is already there, into a second file beside it.
+---
+--- The inverse guard to `init`: that one refuses when the brief exists, this
+--- one refuses when it does not. Neither ever writes over a file — a revision
+--- lands in `MENTOR.md.new` for you to diff, and merging the two is yours.
+function M.revise()
+  local cfg = config.get()
+  local brief = require("mentor.brief")
+
+  if not context.git_root() then
+    notify("not inside a git repository", vim.log.levels.WARN)
     return
   end
 
-  local buf, win = brief.open_draft(path)
-  brief.mark_drafting(win, name)
+  local source = brief.read_whole(cfg.context)
+  if not source then
+    notify("no project brief here yet — :MentorInit drafts one", vim.log.levels.WARN)
+    return
+  end
 
-  local started = send(prompts.init_brief(name), "Draft " .. name .. " for this project.", {
-    system = prompts.system .. prompts.brief_instructions,
-    todos = false, -- a handback section has no business inside the document
-    -- A fresh state: a whole document sitting in the history would follow the
-    -- conversation around for no benefit.
-    state = {},
-    sink = function(text)
-      brief.append(buf, text)
-    end,
-    on_done = function(got_output)
-      if got_output then
-        brief.mark_done(win, name)
-        notify(name .. " drafted — read it, then :w to keep it")
-      elseif brief.is_empty(buf) then
-        -- Nothing came back, so the split is an empty buffer for a file that
-        -- does not exist. The panel already said what went wrong; leaving the
-        -- window behind only invites you to wonder what it is.
-        brief.discard_draft(buf, win)
-      else
-        brief.mark_done(win, name)
-      end
+  local path, name = brief.revision_path(cfg.context)
+  if vim.fn.filereadable(path) == 1 then
+    notify(("%s is already on disk — merge or delete it first"):format(name),
+      vim.log.levels.WARN)
+    return
+  end
+
+  local diff = cfg.context.project_brief_diff ~= false
+
+  draft({
+    path = path,
+    name = name,
+    prompt = prompts.revise_brief(source.name, source.text),
+    echo = "Revise " .. source.name .. " against the project as it is now.",
+    -- Not "`:w` to keep it": saving the revision would leave two briefs on
+    -- disk and the actual job undone. What you want out of it is hunks.
+    note = diff
+      and ("drafting a revision of %s — it opens in a diff when it lands, and `do` on a hunk takes it."):format(source.name)
+      or ("drafting a revision of %s into %s — diff the two when it lands."):format(
+        source.name, name),
+    on_drafted = function(_, win)
+      local diffing = diff and require("mentor.brief").open_diff(win, source.path)
+      require("mentor.brief").mark_merge(win, source.name, diffing)
+      notify(diffing
+        and ("revision ready — `do` takes a hunk into %s, `:q!` discards the rest")
+          :format(source.name)
+        or ("revision drafted into %s — diff it against %s"):format(name, source.name))
     end,
   })
-
-  if not started then
-    brief.discard_draft(buf, win)
-    return
-  end
-  ui.append("drafting into " .. name .. " — read it, then `:w` to keep it.\n")
 end
 
 function M.stop()
@@ -452,6 +529,26 @@ end
 
 ------------------------------------------------------------- panel commands
 
+---@type table<string, MentorCommand>
+local COMMANDS -- forward declaration: the helpers below close over it
+
+--- Command names in a fixed order. `pairs` over a table is not one, and a help
+--- list that reshuffles itself between calls is a list you cannot skim.
+---@return string[]
+local function sorted_names()
+  local names = vim.tbl_keys(COMMANDS)
+  table.sort(names)
+  return names
+end
+
+---@param entry MentorCommand
+---@return string[]
+local function sorted_forms(entry)
+  local forms = vim.tbl_keys(entry.forms or {})
+  table.sort(forms)
+  return forms
+end
+
 --- What you can type in the input box instead of a question. The panel is
 --- where you already are: reaching for `:MentorResume` means leaving it, and
 --- the cursor was in the box for a reason.
@@ -459,31 +556,64 @@ end
 --- `/resume` takes the most recent conversation rather than opening the picker
 --- the way `:MentorResume` does — from in here you are usually carrying on
 --- from the last thing you were doing, and `/resume list` is the picker.
-local COMMANDS = {
-  resume = function(args)
-    if args == "list" or args == "?" then
-      M.resume(nil)
-    else
-      M.resume(args ~= "" and args or "1")
-    end
-  end,
-  reset = function() M.reset() end,
-  stop = function() M.stop() end,
-  help = function()
-    ui.open(config.get().window)
-    ui.ensure_blank_line()
-    ui.append(table.concat({
-      "▍panel commands",
-      "/resume        the most recent conversation here",
-      "/resume 2      …or the second most recent",
-      "/resume list   choose from all of them",
-      "/reset         start a new conversation",
-      "/stop          cancel the answer in flight",
-      "",
-      "",
-    }, "\n"))
-    ui.scroll_to_end()
-  end,
+---
+--- One table, three readers: `submit` dispatches on it, `/help` prints it and
+--- the input box completes from it. A hand-written copy in any of the three
+--- would be the one that goes stale. `forms` are the extra spellings worth
+--- showing a reader — they are not separate commands, so they stay out of
+--- completion, which offers the bare name and lets you type the argument.
+---@class MentorCommand
+---@field desc string one line, for `/help` and the completion menu
+---@field forms string[]|nil argument spellings `/help` should also list
+---@field run fun(args: string)
+COMMANDS = {
+  resume = {
+    desc = "the most recent conversation here",
+    forms = {
+      ["/resume 2"] = "…or the second most recent",
+      ["/resume list"] = "choose from all of them",
+    },
+    run = function(args)
+      if args == "list" or args == "?" then
+        M.resume(nil)
+      else
+        M.resume(args ~= "" and args or "1")
+      end
+    end,
+  },
+  revise = {
+    desc = "draft a revision of the project brief",
+    run = function() M.revise() end,
+  },
+  reset = {
+    desc = "start a new conversation",
+    run = function() M.reset() end,
+  },
+  stop = {
+    desc = "cancel the answer in flight",
+    run = function() M.stop() end,
+  },
+  help = {
+    desc = "list these commands",
+    run = function()
+      ui.open(config.get().window)
+      ui.ensure_blank_line()
+
+      local out = { "▍panel commands" }
+      for _, name in ipairs(sorted_names()) do
+        local entry = COMMANDS[name]
+        out[#out + 1] = ("%-14s %s"):format("/" .. name, entry.desc)
+        for _, form in ipairs(sorted_forms(entry)) do
+          out[#out + 1] = ("%-14s %s"):format(form, entry.forms[form])
+        end
+      end
+      out[#out + 1] = ""
+      out[#out + 1] = ""
+
+      ui.append(table.concat(out, "\n"))
+      ui.scroll_to_end()
+    end,
+  },
 }
 
 --- A line typed in the input box: a command if it is one, otherwise a question.
@@ -511,8 +641,22 @@ function M.submit(text)
     return false
   end
 
-  command(vim.trim(args))
+  command.run(vim.trim(args))
   return true
+end
+
+--- Completion candidates for the input box, in `complete()` item form.
+---
+--- Only the bare names: `/resume list` is an argument to `/resume`, and a menu
+--- that offered both would be inviting you to pick a spelling rather than a
+--- command. `/help` is where the argument forms are written down.
+---@return table[] items { word = "/reset", menu = "start a new conversation" }
+function M.commands()
+  local items = {}
+  for _, name in ipairs(sorted_names()) do
+    items[#items + 1] = { word = "/" .. name, menu = COMMANDS[name].desc }
+  end
+  return items
 end
 
 function M.toggle()

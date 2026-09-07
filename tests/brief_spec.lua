@@ -244,6 +244,128 @@ h.eq("the draft survives the second run",
 
 vim.api.nvim_buf_delete(buf, { force = true })
 
+---------------------------------------------------------------- MentorRevision
+
+-- The inverse guard: nothing to revise until there is a brief.
+get = h.stub_provider()
+session.revise()
+settle()
+h.check("revise refuses when there is no brief", get() == nil)
+
+-- Long enough that max_brief_lines would cut it: a revision has to see the end
+-- of the document, or it would hand back one with the tail deleted.
+local body = { "# Cart", "", "The tutor's file." }
+for i = 1, 40 do
+  body[#body + 1] = "point " .. i
+end
+body[#body + 1] = "the last line of the brief"
+vim.fn.writefile(body, dir .. "/MENTOR.md")
+
+local whole = brief.read_whole(vim.tbl_extend("force", ctx, { max_brief_lines = 5 }))
+h.check("read_whole ignores max_brief_lines",
+  whole.text:find("the last line of the brief", 1, true) ~= nil)
+h.check("...and is not truncated", whole.text:find("truncated", 1, true) == nil)
+-- Same reasoning as find(): the switch is about what every conversation
+-- carries, not about a revision you asked for by name.
+h.check("...and ignores project_brief=false", brief.read_whole(without("project_brief")) ~= nil)
+
+local rev_path, rev_name, source = brief.revision_path(ctx)
+h.eq("the revision lands beside the brief", rev_path, root .. "/MENTOR.md.new")
+h.eq("...named after it", rev_name, "MENTOR.md.new")
+h.eq("...and says what it revises", source.name, "MENTOR.md")
+-- Or the draft would be picked up as the brief on the next question.
+h.check("the revision is not itself a brief candidate",
+  not vim.tbl_contains(ctx.project_brief_files, rev_name))
+
+get = h.stub_provider()
+session.revise()
+settle()
+
+req = get()
+h.check("revise sends a request", req ~= nil)
+h.check("the request carries the current brief",
+  req.prompt:find("the last line of the brief", 1, true) ~= nil)
+-- The brief is data here, not instruction, exactly as in a normal turn.
+h.check("...wrapped as reference material",
+  req.prompt:find("<project_brief>", 1, true) ~= nil)
+h.check("...and named as the subject",
+  req.prompt:find("Revise `MENTOR.md`", 1, true) ~= nil)
+h.check("the drafting exception is in the system prompt",
+  req.system:find("Drafting a project brief", 1, true) ~= nil)
+h.check("the revision stays out of the conversation history",
+  req.state ~= session.state.provider_state)
+
+local rev_buf = buf_named(rev_path)
+h.check("a revision buffer exists", rev_buf ~= nil)
+h.eq("the model's text lands in it",
+  table.concat(vim.api.nvim_buf_get_lines(rev_buf, 0, -1, false), "\n"), "ok")
+h.eq("it is unsaved", vim.bo[rev_buf].modified, true)
+-- The whole point, again: the brief it revises is untouched on disk.
+h.eq("nothing reached disk", vim.fn.filereadable(rev_path), 0)
+h.eq("the original is unchanged",
+  vim.fn.readfile(root .. "/MENTOR.md")[1], "# Cart")
+h.check("the panel says a revision is coming",
+  table.concat(vim.api.nvim_buf_get_lines(ui.state.buf, 0, -1, false), "\n")
+    :find("drafting a revision of MENTOR.md", 1, true) ~= nil)
+
+------------------------------------------------------------------- the merge
+
+-- `:w` on the revision would leave two briefs and the job undone, so the two
+-- come up side by side instead and the winbar talks about hunks.
+local rev_win = win_showing(rev_buf)
+h.check("the revision opens in its own window", rev_win ~= nil)
+h.eq("the revision is in diff mode", vim.wo[rev_win].diff, true)
+
+local target_win = win_showing(buf_named(root .. "/MENTOR.md"))
+h.check("the brief comes up beside it", target_win ~= nil)
+h.eq("...also in diff mode", vim.wo[target_win].diff, true)
+-- `do` pulls from the revision into the file being kept, so that is where the
+-- cursor belongs: saving there is a save of the real brief, by hand.
+h.eq("the cursor lands in the brief", vim.api.nvim_get_current_win(), target_win)
+
+local bar = vim.wo[rev_win].winbar
+h.check("the winbar names the merge keys", bar:find("`do`/`dp`", 1, true) ~= nil, bar)
+h.check("...and offers :q! as the ending", bar:find(":q!", 1, true) ~= nil, bar)
+h.check("...and does not tell you to :w the revision",
+  bar:find(":w` keeps MENTOR.md.new", 1, true) == nil, bar)
+
+-- Diff mode changed fold and wrap in a window we opened; closing the revision
+-- is the end of the comparison and has to be the end of that too.
+vim.api.nvim_win_close(rev_win, true)
+vim.api.nvim_set_current_win(target_win)
+h.eq("closing the revision turns diff off again", vim.wo[target_win].diff, false)
+
+-- The same unsaved-draft guard init has, since it is now the same code.
+get = h.stub_provider()
+session.revise()
+settle()
+h.check("revise will not clobber an unsaved revision", get() == nil)
+h.eq("the draft survives", table.concat(
+  vim.api.nvim_buf_get_lines(rev_buf, 0, -1, false), "\n"), "ok")
+vim.api.nvim_buf_delete(rev_buf, { force = true })
+-- Leave the window count as this section found it, or the next check reads a
+-- split it did not open as one that failed to close.
+if #vim.api.nvim_list_wins() > 1 and vim.api.nvim_win_is_valid(target_win) then
+  vim.api.nvim_win_close(target_win, true)
+end
+
+-- A revision already merged and written is a file like any other.
+vim.fn.writefile({ "a revision I kept" }, rev_path)
+get = h.stub_provider()
+session.revise()
+settle()
+h.check("revise refuses over a revision on disk", get() == nil)
+h.eq("...leaving it alone", vim.fn.readfile(rev_path)[1], "a revision I kept")
+vim.fn.delete(rev_path)
+
+-- :MentorInit is still the one that refuses when a brief is there.
+get = h.stub_provider()
+session.init()
+settle()
+h.check("init still refuses when a brief exists", get() == nil)
+
+vim.fn.delete(dir .. "/MENTOR.md")
+
 -- A backend that answers with nothing leaves an empty buffer for a file that
 -- does not exist — clutter you would have to work out before closing.
 require("mentor.provider").resolve = function()

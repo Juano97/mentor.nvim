@@ -272,14 +272,13 @@ local function draft(spec)
 
   local pending = brief.pending_draft(spec.path)
   if pending then
-    notify(("an unsaved %s draft is already open — `:w` it or `:bd!` it first")
-      :format(spec.name))
-    for _, w in ipairs(vim.api.nvim_list_wins()) do
-      if vim.api.nvim_win_get_buf(w) == pending then
-        vim.api.nvim_set_current_win(w)
-        break
-      end
-    end
+    -- Show it rather than talk about it: the buffer holds the only copy of the
+    -- text, and it may well be hidden, which is how someone ends up told to
+    -- `:bd!` a buffer they cannot find. The number goes in the message so the
+    -- other ending is one paste away.
+    brief.show_draft(pending)
+    notify(("an unsaved %s draft is already open (buffer %d) — `:w` it to keep it, or `:bd! %d` to drop it")
+      :format(spec.name, pending, pending))
     return false
   end
 
@@ -384,6 +383,10 @@ function M.revise()
   end
 
   local diff = cfg.context.project_brief_diff ~= false
+  local take = cfg.context.project_brief_diff_cmd
+  if take == false or take == "" then
+    take = nil
+  end
 
   draft({
     path = path,
@@ -397,11 +400,38 @@ function M.revise()
       or ("drafting a revision of %s into %s — diff the two when it lands."):format(
         source.name, name),
     on_drafted = function(_, win)
-      local diffing = diff and require("mentor.brief").open_diff(win, source.path)
-      require("mentor.brief").mark_merge(win, source.name, diffing)
+      local brief = require("mentor.brief")
+      local diffing = diff and brief.open_diff(win, source.path, take)
+      brief.mark_merge(win, source.name, diffing, take)
+
+      -- The winbar says this too, but it is one line in a window narrow enough
+      -- to cut it in half. The panel is wide, it scrolls, and it is where you
+      -- were already reading — so the keys go here as well, and stay findable
+      -- after you have forgotten them.
+      if diffing then
+        ui.ensure_blank_line()
+        local keys = { "▍merging the revision" }
+        if take then
+          keys[#keys + 1] = ("%-12s take the whole revision"):format(":" .. take)
+        end
+        vim.list_extend(keys, {
+          ("%-12s take the hunk under the cursor"):format("do"),
+          ("%-12s next / previous change"):format("]c  [c"),
+          ("%-12s save %s — the only write in any of this"):format(":w", source.name),
+          ("%-12s close the revision and keep nothing else"):format(":q!"),
+          "",
+          "",
+        })
+        ui.append(table.concat(keys, "\n"))
+        ui.scroll_to_end()
+      end
+
       notify(diffing
-        and ("revision ready — `do` takes a hunk into %s, `:q!` discards the rest")
-          :format(source.name)
+        and (take
+          and ("revision ready — :%s takes all of it into %s, `:q!` discards the rest")
+            :format(take, source.name)
+          or ("revision ready — `do` takes a hunk into %s, `:q!` discards the rest")
+            :format(source.name))
         or ("revision drafted into %s — diff it against %s"):format(name, source.name))
     end,
   })

@@ -242,6 +242,25 @@ h.check("init will not clobber an unsaved draft", get() == nil)
 h.eq("the draft survives the second run",
   table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"), "ok")
 
+-- `bufadd()` hands back an unlisted buffer, and an unsaved draft missing from
+-- `:ls` is one you cannot find by name either.
+h.eq("the draft is listed", vim.bo[buf].buflisted, true)
+
+-- Close its window and the draft is still loaded, still modified, still the
+-- only copy — and now invisible. Refusing the next run has to put it back in
+-- front of you; telling someone to `:bd!` a buffer they cannot see is not a way
+-- out of anything.
+vim.api.nvim_win_close(draft_win, true)
+h.check("closing the window hides the draft", win_showing(buf) == nil)
+
+get = h.stub_provider()
+session.init()
+settle()
+h.check("init still refuses with the draft hidden", get() == nil)
+h.check("...and brings it back into a window", win_showing(buf) ~= nil)
+h.eq("...with the text intact",
+  table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"), "ok")
+
 vim.api.nvim_buf_delete(buf, { force = true })
 
 ---------------------------------------------------------------- MentorRevision
@@ -324,10 +343,57 @@ h.eq("...also in diff mode", vim.wo[target_win].diff, true)
 h.eq("the cursor lands in the brief", vim.api.nvim_get_current_win(), target_win)
 
 local bar = vim.wo[rev_win].winbar
-h.check("the winbar names the merge keys", bar:find("`do`/`dp`", 1, true) ~= nil, bar)
+-- Which spelling depends on how much room the split has, so assert the keys
+-- are named rather than how they are decorated.
+h.check("the winbar names the merge keys", bar:find("do", 1, true) ~= nil, bar)
+h.check("...and the way to take all of it", bar:find(":Dg", 1, true) ~= nil, bar)
 h.check("...and offers :q! as the ending", bar:find(":q!", 1, true) ~= nil, bar)
 h.check("...and does not tell you to :w the revision",
   bar:find(":w` keeps MENTOR.md.new", 1, true) == nil, bar)
+
+-- A winbar wider than its window is scrolled, not shortened: vim keeps the
+-- tail and hides the front, which is where the keys are. So the long form is
+-- only ever set when it fits.
+h.check("the winbar fits its window",
+  vim.fn.strdisplaywidth(bar:gsub("%%#Comment#", ""):gsub("%%%*", ""))
+    <= vim.api.nvim_win_get_width(rev_win), bar)
+
+-- `do`/`dp` read a revision hunk by hunk. Taking the whole thing is the other
+-- ending, and it has to mean the same from either side of the diff.
+h.check("the brief can take the whole revision",
+  vim.fn.getcompletion("Dg", "command")[1] ~= nil)
+local target_buf = vim.api.nvim_win_get_buf(target_win)
+vim.api.nvim_win_call(target_win, function() vim.cmd("Dg") end)
+h.eq("...and does", table.concat(
+  vim.api.nvim_buf_get_lines(target_buf, 0, -1, false), "\n"),
+  table.concat(vim.api.nvim_buf_get_lines(rev_buf, 0, -1, false), "\n"))
+
+-- The case `:%diffget` gets wrong, which is why this copies lines instead: `%`
+-- is `1,$` in the *current* buffer, so a hunk that only appends past the last
+-- line falls outside the range and is skipped. A revision whose one change is a
+-- new final paragraph would arrive without it, silently.
+vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, { "shared", "lines" })
+vim.api.nvim_buf_set_lines(rev_buf, 0, -1, false, { "shared", "lines", "appended at the end" })
+vim.api.nvim_win_call(target_win, function() vim.cmd("Dg") end)
+h.eq("a trailing addition comes across too", table.concat(
+  vim.api.nvim_buf_get_lines(target_buf, 0, -1, false), "\n"),
+  "shared\nlines\nappended at the end")
+
+-- ...and from the other side of the diff, where it is the same operation.
+vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, { "shared", "lines" })
+vim.api.nvim_win_call(rev_win, function() vim.cmd("Dg") end)
+h.eq("the revision window takes all of it the same way", table.concat(
+  vim.api.nvim_buf_get_lines(target_buf, 0, -1, false), "\n"),
+  "shared\nlines\nappended at the end")
+
+-- Both buffers go back as this section found them; the checks below read them.
+vim.api.nvim_buf_set_lines(rev_buf, 0, -1, false, { "ok" })
+
+-- Put the brief back: `Dg` leaves it modified and unsaved, exactly as `do`
+-- does, and a modified buffer named MENTOR.md is a pending draft as far as the
+-- next :MentorInit is concerned.
+vim.api.nvim_buf_call(target_buf, function() vim.cmd("edit!") end)
+h.eq("taking all of it leaves the file itself untouched", vim.bo[target_buf].modified, false)
 
 -- Diff mode changed fold and wrap in a window we opened; closing the revision
 -- is the end of the comparison and has to be the end of that too.

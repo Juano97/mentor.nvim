@@ -110,6 +110,11 @@ M.defaults = {
     -- takes effect without :MentorReset. False keeps the copy sent at the
     -- start of the conversation for its whole length.
     project_brief_refresh = true,
+    -- The command :MentorRevision installs in both halves of the diff to take
+    -- the whole revision at once, when reading it hunk by hunk is not what you
+    -- want. A lowercase `:dg` abbreviation rides along with it, because a user
+    -- command cannot start with a lowercase letter. Set false for neither.
+    project_brief_diff_cmd = "Dg",
     -- :MentorRevision puts its draft in a diff against the brief it revises,
     -- because merging the two is the point and `:w` on the draft is not. Set
     -- false to get the draft in a plain split and diff it yourself.

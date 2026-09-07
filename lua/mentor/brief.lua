@@ -172,15 +172,95 @@ end
 --- of a file that does, is not: saving leaves you with two briefs and the merge
 --- still to do. What you actually want is the good lines out of it and the file
 --- itself gone, so the winbar names `do`/`dp` and offers `:q!` as the ending.
+---
+--- Two spellings, because a diff of a document is a narrow window. A winbar
+--- longer than its window is not shortened, it is *scrolled* — vim shows the
+--- tail and hides the front, which is exactly where the key you need is
+--- written. So measure first and say less rather than say it off-screen.
 ---@param win integer
 ---@param target string the brief being revised
 ---@param diffing boolean whether the two are already side by side
-function M.mark_merge(win, target, diffing)
-  set_winbar(win, diffing
-    and ("`do`/`dp` moves a hunk, `:w` in %s keeps it, `:q!` here discards this")
-      :format(target)
-    or ("mentor stopped writing — `:vert diffsplit %s` to compare, `:q!` discards this")
+---@param cmd string|nil the take-everything command, when there is one
+function M.mark_merge(win, target, diffing, cmd)
+  if not diffing then
+    set_winbar(win, ("mentor stopped writing — `:vert diffsplit %s` to compare, `:q!` discards this")
       :format(target))
+    return
+  end
+
+  -- Longest first; the widest one that fits wins. A diff of a document splits
+  -- the screen twice over, so the narrow forms are the ones most people see.
+  -- With no take-all command the line names only what `do` can do: `:%diffget`
+  -- is not offered as a substitute, because it drops a trailing addition.
+  local forms = cmd and {
+    ((":%s takes all of it, `do` takes one hunk, `:w` in %s keeps them, `:q!` here discards this")
+      :format(cmd, target)),
+    ((":%s all · `do` hunk · `:w` %s keeps it · `:q!`"):format(cmd, target)),
+    ((":%s all · `do` hunk · `:w` %s · `:q!`"):format(cmd, target)),
+    ((":%s all · `do` hunk · `:w` · `:q!`"):format(cmd)),
+    ((":%s · do · :w · :q!"):format(cmd)),
+  } or {
+    ("`do` takes a hunk, `:w` in %s keeps it, `:q!` here discards this"):format(target),
+    ("`do` hunk · `:w` %s · `:q!`"):format(target),
+    "`do` · `:w` · `:q!`",
+  }
+
+  local width = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_width(win) or 0
+  local pick = forms[#forms]
+  for _, form in ipairs(forms) do
+    if vim.fn.strdisplaywidth(form) <= width then
+      pick = form
+      break
+    end
+  end
+  set_winbar(win, pick)
+end
+
+--- The "all of it" verb, in both halves of the diff.
+---
+--- `do`/`dp` are for reading a revision hunk by hunk, which is the point of
+--- opening one. It is not always what you want: sometimes the new document is
+--- simply better and the answer is to take the whole thing. Both buffers get
+--- the command so it means the same wherever the cursor is — pull from the
+--- brief, push from the revision, and the brief ends up matching either way.
+---
+--- The lowercase abbreviation exists because `:dg` cannot be a command at all:
+--- user commands must start with a capital (E183). Both are buffer-local and
+--- both come off with the diff — neither name has any business surviving into
+--- ordinary editing.
+---
+--- Copies the lines rather than running `:%diffget`, which is wrong for this in
+--- a way that loses text quietly: `%` is `1,$` in the *current* buffer, so a
+--- hunk that only appends past the last line sits outside the range and is
+--- skipped. A revision whose only change is a new final paragraph would come
+--- across missing exactly that paragraph, with nothing to say so.
+---@param buf integer the buffer the command is installed in
+---@param name string
+---@param from integer buffer to take the text from
+---@param to integer buffer to put it in
+local function install_take_all(buf, name, from, to)
+  vim.api.nvim_buf_create_user_command(buf, name, function()
+    if not (vim.api.nvim_buf_is_valid(from) and vim.api.nvim_buf_is_valid(to)) then
+      return
+    end
+    vim.api.nvim_buf_set_lines(to, 0, -1, false, vim.api.nvim_buf_get_lines(from, 0, -1, false))
+  end, { desc = "Mentor: take the whole revision" })
+
+  vim.api.nvim_buf_call(buf, function()
+    pcall(vim.cmd, ("cnoreabbrev <buffer> %s %s"):format(name:lower(), name))
+  end)
+end
+
+---@param buf integer
+---@param name string
+local function remove_take_all(buf, name)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  pcall(vim.api.nvim_buf_del_user_command, buf, name)
+  vim.api.nvim_buf_call(buf, function()
+    pcall(vim.cmd, "cunabbrev <buffer> " .. name:lower())
+  end)
 end
 
 --- Put the finished revision side by side with the brief it revises.
@@ -192,8 +272,9 @@ end
 --- of the real brief, by hand, as it should be.
 ---@param win integer the revision's window
 ---@param target_path string the brief being revised
+---@param cmd string|nil name for the take-everything command, nil for none
 ---@return boolean diffing
-function M.open_diff(win, target_path)
+function M.open_diff(win, target_path, cmd)
   if not (win and vim.api.nvim_win_is_valid(win)) then
     return false
   end
@@ -209,6 +290,15 @@ function M.open_diff(win, target_path)
   -- in is one we opened. Closing the revision is the end of the comparison, so
   -- it is also the end of diff mode.
   local buf = vim.api.nvim_win_get_buf(win)
+  local target_buf = vim.api.nvim_win_get_buf(target_win)
+
+  -- The same command in both halves, and the same direction in both: taking all
+  -- of it means the brief ends up matching the revision, wherever the cursor is.
+  if cmd then
+    install_take_all(buf, cmd, buf, target_buf)
+    install_take_all(target_buf, cmd, buf, target_buf)
+  end
+
   local group = vim.api.nvim_create_augroup("mentor_diff_" .. buf, { clear = true })
   vim.api.nvim_create_autocmd({ "BufWinLeave", "BufUnload" }, {
     group = group,
@@ -218,6 +308,10 @@ function M.open_diff(win, target_path)
         vim.api.nvim_win_call(target_win, function()
           vim.cmd("diffoff")
         end)
+      end
+      if cmd then
+        remove_take_all(buf, cmd)
+        remove_take_all(target_buf, cmd)
       end
       pcall(vim.api.nvim_del_augroup_by_id, group)
     end,
@@ -273,6 +367,11 @@ function M.open_draft(path)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
 
+  -- `bufadd()` hands back an *unlisted* buffer, which `:ls` does not show. An
+  -- unsaved file is exactly the thing a buffer list exists to remind you about,
+  -- and a draft you cannot see in it is a draft you cannot find again.
+  vim.bo[buf].buflisted = true
+
   local host = host_win()
   if host then
     vim.api.nvim_set_current_win(host)
@@ -294,6 +393,36 @@ function M.open_draft(path)
   })
 
   return buf, win
+end
+
+--- Put a draft that is already open back in front of the user.
+---
+--- A draft whose window you closed stays loaded, modified and off `:ls` — the
+--- only copy of text nothing on disk has. Refusing a second run and describing
+--- that buffer was advice about something invisible, so show it instead: reuse
+--- its window if it still has one, otherwise split a new one the way
+--- `open_draft` does.
+---@param buf integer
+---@return integer|nil win
+function M.show_draft(buf)
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return nil
+  end
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      vim.api.nvim_set_current_win(win)
+      return win
+    end
+  end
+
+  local host = host_win()
+  if host then
+    vim.api.nvim_set_current_win(host)
+  end
+  vim.cmd("split")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  return win
 end
 
 --- Undo `open_draft` when the request never got off the ground: no empty split

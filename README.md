@@ -319,6 +319,19 @@ propose the update, `:MentorRevision` — or `/revise` in the input box — draf
   → :q! the revision — it was never a file
 ```
 
+When the revision is simply better and you do not want to read it hunk by hunk,
+`:Dg` — or `:dg`, which abbreviates to it — takes the whole thing. It works from
+either window: it pulls from the brief and pushes from the revision, so the brief
+ends up matching either way. Both names are local to the two buffers in the diff
+and go away with it. `context.project_brief_diff_cmd = false` skips them, and
+the `:w` afterwards is yours either way.
+
+Reach for `:Dg` rather than `:%diffget`, which looks equivalent and is not: `%`
+means `1,$` in the buffer you are in, so a hunk that only *appends* past the last
+line sits outside the range and is skipped. A revision whose one change is a new
+final paragraph comes across without it, and nothing says so. `:Dg` copies the
+whole buffer instead, so there is no range to fall off the end of.
+
 **`:w` is not how you finish a revision.** Saving `MENTOR.md.new` would leave you
 two briefs and the merge still to do. The revision is a source to take hunks
 from, not a file to keep: `do` (diff obtain) pulls one into `MENTOR.md`, `dp`

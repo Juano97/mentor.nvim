@@ -168,6 +168,34 @@ the window it opened — we changed fold and wrap settings there, so we undo the
 `context.project_brief_diff = false` opts out and the winbar names the manual
 `:vert diffsplit` instead.
 
+**Say it where it fits, and say it twice.** A winbar longer than its window is
+not shortened by vim, it is *scrolled*: the tail stays and the front — where the
+key you need is written — disappears behind a `<`. A revision splits the screen
+twice over, so that is the common case, not the edge one. `mark_merge` therefore
+carries several spellings, longest to shortest, and picks the widest that fits
+`nvim_win_get_width`; the shortest is four keys and no prose. Never add to that
+line without checking it still degrades. The same keys go into the transcript as
+well, because the panel is wide, it scrolls, and it is what the user was already
+reading — a winbar is a reminder, not documentation.
+
+**`:Dg` is the "all of it" verb**, installed by `open_diff` into *both* diff
+buffers: `%diffget` in the brief, `%diffput` in the revision, so it means the
+same thing wherever the cursor is. `:dg` is a `cnoreabbrev` onto it, because a
+user command cannot start with a lowercase letter (`E183`). Both are
+buffer-local and both are torn down by the same autocmd that ends diff mode —
+neither name has any business surviving into ordinary editing. It leaves the
+brief modified and unsaved exactly as `do` does; the write stays the user's.
+`context.project_brief_diff_cmd = false` installs neither, and the winbar then
+names `do` alone rather than offering a substitute.
+
+It copies the buffer rather than running `:%diffget`, and that is not a style
+choice. `%` is `1,$` in the *current* buffer, so a hunk that only appends past
+the last line falls outside the range and is skipped — a revision whose one
+change is a new final paragraph arrives without it and says nothing. Losing text
+quietly is the worst failure this path can have, so the take-all verb never goes
+through a range. `tests/brief_spec.lua` pins the trailing-addition case; do not
+"simplify" it back to `:%diffget`.
+
 The revision is handed the brief through `brief.read_whole`, which deliberately
 ignores `max_brief_lines`: truncating here would have the model revise a
 document it cannot see the end of and hand back one with the tail silently

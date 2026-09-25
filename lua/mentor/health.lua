@@ -28,6 +28,13 @@ function M.check()
       health.info("model: " .. (cfg.claude_cli.model or "the CLI's own default (:MentorModel to change)"))
       health.info("allowed tools: " .. (table.concat(cfg.claude_cli.tools, ", ")))
       health.info("denied tools: " .. table.concat(cfg.claude_cli.disallowed_tools, ", "))
+      local deny_read = cfg.claude_cli.deny_read or {}
+      if #deny_read > 0 then
+        health.info(("denied read paths: %d (claude_cli.deny_read)"):format(#deny_read))
+      else
+        health.warn("deny_read is empty — the read tools can reach ~/.ssh, .env files "
+          .. "and anything else your user can read")
+      end
       if not cfg.claude_cli.strict_mcp_config then
         health.warn("strict_mcp_config is off — ambient MCP servers can add tools "
           .. "that bypass the read-only guarantee")

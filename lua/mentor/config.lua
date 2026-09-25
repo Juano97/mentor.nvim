@@ -45,6 +45,22 @@ M.defaults = {
       "Edit", "Write", "NotebookEdit", "Bash",
       "Task", "WebFetch", "WebSearch", "TodoWrite",
     },
+    -- Read/Grep/Glob are not fenced to the project: they reach anything your
+    -- user can, and whatever they read goes to the model's provider. These
+    -- paths are denied as `Read(...)` rules, which the CLI also applies to Grep
+    -- and Glob. `~/` is your home, `//` an absolute path, so `//**/.env` is a
+    -- .env anywhere. Add your own; set {} to allow everything again.
+    deny_read = {
+      "~/.ssh/**", "~/.gnupg/**", "~/.aws/**", "~/.azure/**",
+      "~/.config/gcloud/**", "~/.config/gh/**", "~/.kube/**",
+      "~/.docker/config.json", "~/.netrc", "~/.git-credentials",
+      "~/.npmrc", "~/.pypirc", "~/.cargo/credentials*",
+      "~/.password-store/**", "~/.local/share/keyrings/**",
+      -- The CLI's own credentials, and every other project's transcripts.
+      "~/.claude/**", "~/.claude.json",
+      "//**/.env", "//**/.env.*", "//**/*.pem", "//**/*.key",
+      "//**/id_rsa*", "//**/id_ecdsa*", "//**/id_ed25519*",
+    },
 
     -- Without these, ambient MCP servers and user settings leak extra tools
     -- into the session and quietly widen the sandbox.

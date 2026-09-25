@@ -37,6 +37,63 @@ end
 h.eq("mcp servers excluded", cfg.claude_cli.strict_mcp_config, true)
 h.eq("ambient settings excluded", cfg.claude_cli.setting_sources, "")
 
+-- And the argv it becomes, since that is what the CLI actually enforces.
+local cli = require("mentor.provider.claude_cli")
+local function denied_in(args)
+  for i, a in ipairs(args) do
+    if a == "--disallowedTools" then
+      return vim.split(args[i + 1], ",", { plain = true })
+    end
+  end
+  return {}
+end
+local denied = denied_in(cli.build_args(cfg.claude_cli, "sys", {}))
+for _, rule in ipairs({ "Edit", "Write", "Bash", "Read(~/.ssh/**)", "Read(~/.claude/**)", "Read(//**/.env)" }) do
+  h.check("argv denies " .. rule, vim.tbl_contains(denied, rule), table.concat(denied, ","))
+end
+local open = denied_in(cli.build_args(vim.tbl_extend("force", cfg.claude_cli, { deny_read = false }), "sys", {}))
+h.check("deny_read=false drops only the path rules",
+  vim.tbl_contains(open, "Write") and not vim.tbl_contains(open, "Read(~/.ssh/**)"), table.concat(open, ","))
+
+-- The API key must never be in curl's argv, where `ps` shows it to anyone.
+local http = require("mentor.provider.openai_compat")
+local real_system, real_available = vim.system, http.available
+local spawned, on_exit, header_path, header_mode, header_text
+http.available = function() return true end
+vim.system = function(cmd, _, cb)
+  spawned, on_exit = cmd, cb
+  for i, a in ipairs(cmd) do
+    if a == "-H" and cmd[i + 1]:sub(1, 1) == "@" then
+      header_path = cmd[i + 1]:sub(2)
+    end
+  end
+  local st = header_path and vim.uv.fs_stat(header_path)
+  header_mode = st and bit.band(st.mode, 511)
+  header_text = header_path and table.concat(vim.fn.readfile(header_path), "\n")
+  return { kill = function() end }
+end
+vim.env.MENTOR_TEST_KEY = "sk-test-canary"
+http.chat({
+  prompt = "hi", system = "sys", state = {}, cwd = dir,
+  cfg = vim.tbl_extend("force", cfg.openai_compat,
+    { api_key_env = "MENTOR_TEST_KEY", extra_headers = { ["X-Evil"] = "a\r\nX-Injected: 1" } }),
+  on_delta = function() end, on_error = function() end, on_done = function() end,
+})
+vim.system, http.available = real_system, real_available
+
+h.check("curl was spawned", spawned ~= nil)
+h.check("key is not in argv",
+  spawned and not table.concat(spawned, " "):find("sk-test-canary", 1, true), spawned and table.concat(spawned, " "))
+h.check("headers go by file", header_path ~= nil)
+h.eq("header file is 0600", header_mode, 384)
+h.check("header file carries the key", header_text and header_text:find("Bearer sk-test-canary", 1, true) ~= nil)
+h.check("a header value cannot add a header",
+  header_text and not header_text:find("\nX-Injected", 1, true), header_text)
+if on_exit then
+  on_exit({ code = 0 })
+end
+h.check("header file is gone after the request", header_path and not vim.uv.fs_stat(header_path))
+
 local ui = require("mentor.ui")
 ui.open(cfg.window)
 h.check("panel opens", ui.win_valid())

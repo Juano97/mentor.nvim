@@ -16,6 +16,12 @@ started with `--tools "Read,Grep,Glob"`, `--disallowedTools "Edit,Write,Bash,…
 in the session, so there is nothing for the model to decide about. The HTTP
 backend has no tools at all. Never enforce this with prompt wording.
 
+The read tools are not limited to the repo, so `claude_cli.deny_read` also
+denies the usual places secrets live — `~/.ssh`, cloud credentials, `.env`
+files, private keys, the CLI's own `~/.claude` — as `Read(...)` rules. The CLI
+applies those rules to Grep and Glob as well. Add your own, or set `{}` to
+allow everything.
+
 **Soft guarantee — pedagogy.** A tutor system prompt (`lua/mentor/prompts.lua`)
 stops it handing over finished implementations. This one *is* wording, so it is
 the part that needs tuning; treat it as the file you iterate on.
@@ -208,6 +214,8 @@ def total(items, discount=0):
 builds the comment using the target buffer's `commentstring` and inserts it. The
 inserted text is never model-authored code, and the AI still has no write tool.
 Markers go in bottom-up so earlier insertions don't shift later line numbers.
+Only files inside the repo (and outside `.git`) are accepted, and any `*/` or
+`-->` in the sentence is taken out so it cannot end the comment early.
 
 Once you have worked through them, `:MentorTodoClear` takes the markers out of
 the buffer you are in, and `:MentorTodoClear!` sweeps the whole repo — including
@@ -478,10 +486,10 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 
 | Spec | Covers |
 |---|---|
-| `wiring_spec` | Loading, commands, config merge, the sandbox flags, streaming append |
+| `wiring_spec` | Loading, commands, config merge, the sandbox flags and path denials in the real argv, the API key kept out of argv, streaming append |
 | `input_spec` | Input box geometry and keymaps, submit, context tracking from the panel |
 | `ui_spec` | Busy winbar and spinner, selection attach/clear, range clamping |
-| `todo_spec` | TODO parsing, last-block scoping, the on/off toggle |
+| `todo_spec` | TODO parsing, last-block scoping, the on/off toggle, paths fenced to the repo, comment-breakout stripping |
 | `model_spec` | Model selection per backend, runtime switching, transcript labelling |
 | `brief_spec` | Brief discovery and precedence, sent once per conversation and again when edited, `:MentorInit` drafting to a buffer and not to disk, `:MentorRevision` drafting beside it |
 | `history_spec` | Saving a conversation per turn, resuming one, pruning, a session the backend dropped |

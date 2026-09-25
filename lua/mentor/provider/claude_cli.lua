@@ -12,11 +12,13 @@ function M.available(cfg)
   return vim.fn.executable(cfg.cmd) == 1
 end
 
+--- Public so tests/wiring_spec.lua can assert on the real argv, not the config
+--- it is built from.
 ---@param cfg table
 ---@param system string
 ---@param state table
 ---@return string[]
-local function build_args(cfg, system, state)
+function M.build_args(cfg, system, state)
   local args = { "-p", "--output-format", cfg.stream and "stream-json" or "json" }
 
   if cfg.stream then
@@ -33,8 +35,14 @@ local function build_args(cfg, system, state)
   -- Allowlist. An empty table means "no tools at all" (pure chat).
   vim.list_extend(args, { "--tools", table.concat(cfg.tools or {}, ",") })
 
-  if cfg.disallowed_tools and #cfg.disallowed_tools > 0 then
-    vim.list_extend(args, { "--disallowedTools", table.concat(cfg.disallowed_tools, ",") })
+  -- Path rules ride in the same flag as the tool names. The allowlist decides
+  -- which tools exist; these decide what the ones that do exist may look at.
+  local denied = vim.list_extend({}, cfg.disallowed_tools or {})
+  for _, path in ipairs(cfg.deny_read or {}) do
+    denied[#denied + 1] = ("Read(%s)"):format(path)
+  end
+  if #denied > 0 then
+    vim.list_extend(args, { "--disallowedTools", table.concat(denied, ",") })
   end
   if cfg.strict_mcp_config then
     table.insert(args, "--strict-mcp-config")
@@ -59,7 +67,7 @@ function M.chat(o)
     return nil
   end
 
-  local cmd = vim.list_extend({ cfg.cmd }, build_args(cfg, o.system, o.state))
+  local cmd = vim.list_extend({ cfg.cmd }, M.build_args(cfg, o.system, o.state))
   local pending, stderr_chunks = "", {}
   local saw_delta = false
   local reported = false -- the result event already explained the failure

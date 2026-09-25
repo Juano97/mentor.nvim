@@ -100,6 +100,49 @@ h.eq("stale marker is gone", vim.api.nvim_buf_get_lines(stale, 0, -1, false)[1],
 h.check("sweep left the buffer unsaved", vim.bo[stale].modified)
 h.eq("the file on disk is untouched until you save", #vim.fn.readfile(dir .. "/stale.lua"), 2)
 
+------------------------------------------------- where the model may point us
+
+-- The path is the model's: it stays inside the project, whatever it says.
+local outside = vim.fn.tempname()
+vim.fn.writefile({ "export PATH=/usr/bin" }, outside)
+vim.uv.fs_symlink(outside, dir .. "/link.sh")
+for _, case in ipairs({
+  { outside, "absolute path out of the repo" },
+  { "../" .. vim.fs.basename(dir) .. "/../" .. vim.fs.basename(outside), "../ out of the repo" },
+  { "link.sh", "symlink that leads out" },
+  { ".git/config", "inside .git" },
+  { "nope.py", "missing file" },
+}) do
+  local ok, msg = todo.insert({ path = case[1], line = 1, text = "look here" })
+  h.check("refuses " .. case[2], not ok, msg)
+end
+h.eq("the outside file was never loaded", vim.fn.bufloaded(outside), 0)
+h.check("accepts an absolute path inside", (todo.resolve(dir, dir .. "/cart.py")) ~= nil)
+
+-- The sentence must not be able to end the comment and become code.
+for _, case in ipairs({
+  { "/* %s */", "x */ body { display: none } /* y", "*/" },
+  { "/* %s */", "x **// y", "*/" },
+  { "<!-- %s -->", "x --> <script>alert(1)</script> <!-- y", "-->" },
+  { "<!-- %s -->", "x --!> <b>y</b>", "--" },
+  { "(* %s *)", "x (* y", "(*" },
+}) do
+  local out = todo.sanitize(case[2], case[1])
+  h.check(("%s: no %s survives"):format(case[1], case[3]), not out:find(case[3], 1, true), out)
+end
+h.eq("no trailing line continuation", todo.sanitize("check this \\\\ ", "// %s"), "check this")
+h.eq("a line comment keeps its text", todo.sanitize("use a/b */ c", "# %s"), "use a/b */ c")
+h.eq("percent survives sanitising", todo.sanitize("apply 50% off", "/* %s */"), "apply 50% off")
+
+local ok_css = todo.insert({ path = "style.css", line = 1, text = "x */ body { display: none } /* y" })
+h.check("css insert still works", ok_css)
+local css = vim.fn.bufadd(dir .. "/style.css")
+vim.fn.bufload(css)
+local first = vim.api.nvim_buf_get_lines(css, 0, 1, false)[1]
+h.check("css marker is one whole comment",
+  todo.is_marker(first, "/* %s */", "TODO(human)") and select(2, first:gsub("%*/", "")) == 1, first)
+todo.clear(css)
+
 local prompts = require("mentor.prompts")
 h.check("todo instructions exist", prompts.todo_instructions:find("TODO(human)", 1, true) ~= nil)
 

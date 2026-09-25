@@ -15,8 +15,11 @@ layers are deliberately not conflated:
 - **Hard (capability).** `lua/mentor/provider/claude_cli.lua:19` builds the
   argv: `--tools` allowlists Read/Grep/Glob, `--disallowedTools` names the write
   tools, `--strict-mcp-config` and `--setting-sources ""` stop ambient MCP
-  servers and user settings widening the sandbox. The `openai_compat` backend
-  sends no tools at all.
+  servers and user settings widening the sandbox. `deny_read` becomes
+  `Read(...)` rules in the same `--disallowedTools` flag — the read tools are
+  not fenced to the repo, so without it `~/.ssh` or a `.env` is one prompt
+  injection away from the provider. The CLI applies Read rules to Grep and Glob
+  too (checked live). The `openai_compat` backend sends no tools at all.
 - **Soft (pedagogy).** `lua/mentor/prompts.lua` stops it handing over finished
   implementations.
 
@@ -122,6 +125,14 @@ line and a sentence; `todo.lua` builds the comment from the target buffer's
 `commentstring`. Inserting model-written *code* would break the guarantee even
 though no tool was involved. Markers go in bottom-up so earlier insertions do
 not shift later line numbers.
+
+Both halves of the item are untrusted, and each has a guard. `todo.resolve`
+fences the path to the repo through `fs_realpath` — absolute paths, `../` and
+symlinks out are refused, and so is `.git`. `todo.sanitize` strips the
+commentstring's own delimiters from the sentence, because `*/` or `-->` in the
+text would end the comment and make the rest of the line live code; it also
+drops a trailing `\`, which in C continues a `//` comment onto the real line
+below. Never build a marker from `item.text` without going through it.
 
 `todo.clear` is the inverse and stays symmetrical with it. It removes only lines
 that are *wholly* a marker comment — matched by taking the buffer's
@@ -257,6 +268,11 @@ fires exactly once, including on failure. `o.state` is the provider's to mutate
 (CLI session id, or HTTP message history) and is cleared when the backend
 changes. The prompt goes over **stdin**, not argv — large diffs would hit
 ARG_MAX. Exit code 143 is SIGTERM from `:MentorStop` and is not an error.
+
+**Secrets never go in argv.** Any local user can read a process's arguments
+from `ps`. `openai_compat` writes its headers (the API key, `extra_headers`) to
+a 0600 file created with `O_EXCL` and hands curl `-H @file`, deleting it on
+exit. `wiring_spec` asserts the key is absent from the spawned argv.
 
 ## Tests
 

@@ -102,17 +102,80 @@ function M.commentstring(buf)
   return by_ft[ft] or "# %s"
 end
 
+--- Where an item points, if that is somewhere a marker may go.
+---
+--- The path is the model's, so it is fenced to the project: an absolute path,
+--- a `../`, or a symlink that leads out of the repo would otherwise have us
+--- load `~/.bashrc` into a hidden buffer and edit it, one `:wa` away from disk.
+--- Resolving through `fs_realpath` is what catches the symlink. `.git` is
+--- inside the root but is not the project's code.
+---@param root string
+---@param path string
+---@return string|nil resolved, string|nil err
+function M.resolve(root, path)
+  local real_root = vim.uv.fs_realpath(root)
+  local full = vim.startswith(path, "/") and path or (root .. "/" .. path)
+  local real = vim.uv.fs_realpath(full)
+  if not (real and real_root) or vim.fn.isdirectory(real) == 1 then
+    return nil, "no such file: " .. path
+  end
+  if not vim.startswith(real, real_root .. "/") then
+    return nil, path .. " is outside the project"
+  end
+  local rel = real:sub(#real_root + 2)
+  if rel == ".git" or vim.startswith(rel, ".git/") then
+    return nil, path .. " is inside .git"
+  end
+  return real, nil
+end
+
+--- The model's sentence, made safe to put inside `cs`.
+---
+--- A comment syntax with a closer ends at the first closer in the text, so a
+--- sentence carrying `*/` or `-->` would put whatever follows it into the file
+--- as live code — model-authored code, which is the one thing a marker must
+--- never be. The opener goes too (OCaml-style comments nest, so a stray one
+--- swallows the real closer), and for a closer ending in `>` its stem as well:
+--- HTML also ends a comment at `--!>`. Stripping repeats until nothing changes,
+--- because removing one delimiter can join the halves of another.
+---
+--- A trailing backslash is a line continuation in C and C++ even inside a `//`
+--- comment: it would make the line *below* the marker part of the comment, and
+--- quietly delete real code. Control characters have no business in a comment.
+---@param text string
+---@param cs string
+---@return string
+function M.sanitize(text, cs)
+  text = text:gsub("%c", " ")
+
+  local prefix, suffix = cs:match("^(.-)%%s(.*)$")
+  prefix, suffix = vim.trim(prefix or ""), vim.trim(suffix or "")
+  if suffix ~= "" then
+    local delims = { suffix }
+    if prefix ~= "" then
+      delims[#delims + 1] = prefix
+    end
+    if suffix:sub(-1) == ">" and #suffix > 1 then
+      delims[#delims + 1] = suffix:sub(1, -2)
+    end
+    repeat
+      local before = text
+      for _, d in ipairs(delims) do
+        text = text:gsub(vim.pesc(d), "")
+      end
+    until text == before
+  end
+
+  return vim.trim((text:gsub("[\\%s]+$", "")))
+end
+
 ---@param item table { path, line, text }
 ---@return boolean ok, string message
 function M.insert(item)
   local root = context.git_root() or vim.fn.getcwd()
-  local path = item.path
-  if not vim.startswith(path, "/") then
-    path = root .. "/" .. path
-  end
-
-  if vim.fn.filereadable(path) == 0 then
-    return false, "no such file: " .. item.path
+  local path, err = M.resolve(root, item.path)
+  if not path then
+    return false, err
   end
 
   local buf = vim.fn.bufadd(path)
@@ -129,8 +192,12 @@ function M.insert(item)
   local indent = target:match("^%s*") or ""
 
   local marker = require("mentor.config").get().learning.marker
-  local body = marker .. ": " .. item.text
   local cs = M.commentstring(buf)
+  local text = M.sanitize(item.text, cs)
+  if text == "" then
+    return false, item.path .. ": nothing left to say once made safe for a comment"
+  end
+  local body = marker .. ": " .. text
   -- Function replacement: item.text may contain % which breaks a plain gsub.
   local comment = cs:gsub("%%s", function()
     return body

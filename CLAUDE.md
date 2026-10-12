@@ -179,12 +179,45 @@ the window it opened — we changed fold and wrap settings there, so we undo the
 `context.project_brief_diff = false` opts out and the winbar names the manual
 `:vert diffsplit` instead.
 
+**`:MentorAccept` is the one write to the brief, and it is a human's.** It
+copies the whole revision into `MENTOR.md`, saves it (unless
+`project_brief_accept_write = false`), and closes the revision through
+`brief.close_revision`. That is `:w` with fewer steps, which is why it fits the
+rule above: a person typed a command naming this exact text with the diff in
+front of them. The target is the brief `revision_path` found, never a path from
+the revision's text, and no model output can trigger it. Its refusals are the
+safety: still streaming (`state.drafting`), empty revision, and unsaved edits in
+the brief unless `!` — `do` hunks and the user's own typing look the same from
+here, so the bang is the user saying which. It copies lines rather than
+diffgetting for the same reason `:Dg` does.
+
+`close_revision` runs the diff teardown itself instead of relying on the
+`BufWinLeave` that closing the window fires. Autocmds do not nest by default, so
+anything calling it from inside one — the specs run inside `VimEnter` — would
+leave diff mode on in the brief and `:Dg` installed there. `open_diff` keeps the
+teardown in `teardowns[buf]` so both paths share it.
+
+**Brief notes are collected, never applied.** When there is a brief, the system
+prompt gets `prompts.note_instructions`, and `brief.parse_notes` lifts a
+`## Brief notes` section out of each conversation reply into
+`state.brief_notes` (deduplicated, at most three per reply, 300 chars each). They
+reach the file only by way of `/revise` → diff → `:MentorAccept`; `revise`
+snapshots them into `revision_notes` and accepting retires exactly those. The
+model never gets to edit its own brief directly, and that is a hard line, not a
+missing feature: the brief rides into every future conversation, so a write the
+model could make on its own turns one prompt injection into a permanent one.
+Notes are untrusted the same way the brief is — they go back to the model
+wrapped in `<brief_notes>` inside the user turn. They ask for no line numbers on
+purpose: a `path:LINE` item would also match the TODO(human) parser. Drafts pass
+`notes = false`; a document is not the place for notes about itself.
+
 **Say it where it fits, and say it twice.** A winbar longer than its window is
 not shortened by vim, it is *scrolled*: the tail stays and the front — where the
 key you need is written — disappears behind a `<`. A revision splits the screen
 twice over, so that is the common case, not the edge one. `mark_merge` therefore
 carries several spellings, longest to shortest, and picks the widest that fits
-`nvim_win_get_width`; the shortest is four keys and no prose. Never add to that
+`nvim_win_get_width`; the shortest is `:MentorAccept · :q!` — the two endings
+only this plugin knows. `:Dg` and `do` are in the transcript. Never add to that
 line without checking it still degrades. The same keys go into the transcript as
 well, because the panel is wide, it scrolls, and it is what the user was already
 reading — a winbar is a reminder, not documentation.

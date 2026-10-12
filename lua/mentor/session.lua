@@ -17,6 +17,9 @@ M.state = {
   briefed_stamp = nil, -- ...and a hash of the version that went in
   shown_model = nil, -- model named in the transcript most recently
   conversation = nil, -- the saved record this conversation writes to
+  drafting = nil, -- path a draft is streaming into, while it is
+  brief_notes = {}, -- what replies said the brief is missing, for /revise
+  revision_notes = nil, -- ...the ones the open revision was asked to fold in
 }
 
 local function notify(msg, level)
@@ -55,14 +58,36 @@ local function remember(root, name, echo)
   conv.model = cfg[name] and cfg[name].model or nil
   conv.briefed = M.state.briefed_root
   conv.briefed_stamp = M.state.briefed_stamp
+  conv.brief_notes = M.state.brief_notes
   conv.lines = ui.lines()
 
   store.save(cfg.history, conv)
 end
 
+--- Keep what a reply said the brief is missing, until a revision folds it in.
+---
+--- Only kept, never applied: the notes reach `MENTOR.md` by way of `/revise`,
+--- a diff you read, and `:MentorAccept` — the same road as any other revision.
+---@param text string the whole reply
+local function collect_notes(text)
+  local found = require("mentor.brief").parse_notes(text)
+  local fresh = 0
+  for _, note in ipairs(found) do
+    if not vim.tbl_contains(M.state.brief_notes, note) then
+      M.state.brief_notes[#M.state.brief_notes + 1] = note
+      fresh = fresh + 1
+    end
+  end
+  if fresh > 0 then
+    local n = #M.state.brief_notes
+    ui.append(("▍%d note%s for the brief pending — /revise folds %s in, /notes lists %s\n\n")
+      :format(n, n == 1 and "" or "s", n == 1 and "it" or "them", n == 1 and "it" or "them"))
+  end
+end
+
 --- @param prompt string what the model sees
 --- @param echo string what the user sees in the panel
---- @param opts table|nil { sink, system, todos, state, on_done } see M.init
+--- @param opts table|nil { sink, system, todos, notes, state, on_done } see M.init
 --- @return boolean started false when nothing was sent
 local function send(prompt, echo, opts)
   if M.state.busy then
@@ -100,8 +125,10 @@ local function send(prompt, echo, opts)
   -- A side request carrying its own state (:MentorInit) is not a conversation
   -- and gets none of this.
   local briefing = nil
+  local briefed = false
   if not opts.state then
     local brief = require("mentor.brief").read(cfg.context)
+    briefed = brief ~= nil
     if brief then
       local stamp = vim.fn.sha256(brief.text)
       local refresh = cfg.context.project_brief_refresh ~= false
@@ -134,10 +161,17 @@ local function send(prompt, echo, opts)
   if opts.todos ~= false and cfg.learning and cfg.learning.todos then
     system = system .. prompts.todo_instructions
   end
+  -- Notes are measured against the brief, so a conversation that was never
+  -- shown one has nothing to measure them against.
+  local notes = briefed and opts.notes ~= false and cfg.context.project_brief_notes ~= false
+  if notes then
+    system = system .. prompts.note_instructions
+  end
 
   -- Deltas land in the transcript unless a caller redirects them (:MentorInit
   -- streams into a draft buffer instead).
   local sink = opts.sink or ui.append
+  local reply = {}
 
   M.state.handle = impl.chat({
     prompt = prompt,
@@ -148,6 +182,7 @@ local function send(prompt, echo, opts)
 
     on_delta = function(text)
       got_output = true
+      reply[#reply + 1] = text
       sink(text)
     end,
 
@@ -170,6 +205,9 @@ local function send(prompt, echo, opts)
         ui.append("(no response)\n")
       end
       ui.append("\n")
+      if notes and got_output then
+        collect_notes(table.concat(reply))
+      end
       -- A side request carrying its own state (:MentorInit) is not part of the
       -- conversation and has nothing to resume.
       if got_output and not opts.state then
@@ -288,6 +326,7 @@ local function draft(spec)
   local started = send(spec.prompt, spec.echo, {
     system = prompts.system .. prompts.brief_instructions,
     todos = false, -- a handback section has no business inside the document
+    notes = false, -- ...and nor do notes about the document it is writing
     -- A fresh state: a whole document sitting in the history would follow the
     -- conversation around for no benefit.
     state = {},
@@ -295,6 +334,7 @@ local function draft(spec)
       brief.append(buf, text)
     end,
     on_done = function(got_output)
+      M.state.drafting = nil
       if got_output then
         if spec.on_drafted then
           spec.on_drafted(buf, win)
@@ -317,6 +357,7 @@ local function draft(spec)
     brief.discard_draft(buf, win)
     return false
   end
+  M.state.drafting = spec.path
 
   ui.append((spec.note or ("drafting into " .. spec.name ..
     " — read it, then `:w` to keep it.")) .. "\n")
@@ -388,10 +429,15 @@ function M.revise()
     take = nil
   end
 
-  draft({
+  -- Pending notes ride along, and the ones that did are remembered: accepting
+  -- this revision retires them, and notes that arrive while you read it do not
+  -- go with it.
+  local notes = vim.deepcopy(M.state.brief_notes)
+
+  local started = draft({
     path = path,
     name = name,
-    prompt = prompts.revise_brief(source.name, source.text),
+    prompt = prompts.revise_brief(source.name, source.text, notes),
     echo = "Revise " .. source.name .. " against the project as it is now.",
     -- Not "`:w` to keep it": saving the revision would leave two briefs on
     -- disk and the actual job undone. What you want out of it is hunks.
@@ -402,7 +448,7 @@ function M.revise()
     on_drafted = function(_, win)
       local brief = require("mentor.brief")
       local diffing = diff and brief.open_diff(win, source.path, take)
-      brief.mark_merge(win, source.name, diffing, take)
+      brief.mark_merge(win, source.name, diffing)
 
       -- The winbar says this too, but it is one line in a window narrow enough
       -- to cut it in half. The panel is wide, it scrolls, and it is where you
@@ -410,9 +456,12 @@ function M.revise()
       -- after you have forgotten them.
       if diffing then
         ui.ensure_blank_line()
-        local keys = { "▍merging the revision" }
+        local keys = {
+          "▍merging the revision",
+          ("%-14s take all of it, save %s, close the revision"):format(":MentorAccept", source.name),
+        }
         if take then
-          keys[#keys + 1] = ("%-12s take the whole revision"):format(":" .. take)
+          keys[#keys + 1] = ("%-14s take all of it, leave %s unsaved"):format(":" .. take, source.name)
         end
         vim.list_extend(keys, {
           ("%-12s take the hunk under the cursor"):format("do"),
@@ -427,14 +476,123 @@ function M.revise()
       end
 
       notify(diffing
-        and (take
-          and ("revision ready — :%s takes all of it into %s, `:q!` discards the rest")
-            :format(take, source.name)
-          or ("revision ready — `do` takes a hunk into %s, `:q!` discards the rest")
-            :format(source.name))
-        or ("revision drafted into %s — diff it against %s"):format(name, source.name))
+        and ("revision ready — :MentorAccept takes all of it into %s, `do` a hunk, `:q!` discards")
+          :format(source.name)
+        or ("revision drafted into %s — :MentorAccept takes it, or diff it against %s")
+          :format(name, source.name))
     end,
   })
+
+  if started then
+    M.state.revision_notes = notes
+  end
+end
+
+--- Finish a revision: the brief becomes the revision, saved, and the revision
+--- buffer goes.
+---
+--- The one place the plugin writes the brief, and it is a command you type
+--- with the diff in front of you — `:w` with fewer steps, not a write the model
+--- can reach. Refuses while the revision is still streaming (half a document
+--- is not one to accept), when it is empty, and when the brief has unsaved
+--- edits that taking all of it would overwrite; `force` (`:MentorAccept!`)
+--- overrides that last one only.
+---@param force boolean|nil
+---@return boolean accepted
+function M.accept(force)
+  local cfg = config.get()
+  local brief = require("mentor.brief")
+
+  local path, name, source = brief.revision_path(cfg.context)
+  if not source then
+    notify("no project brief here — :MentorInit drafts one", vim.log.levels.WARN)
+    return false
+  end
+  if M.state.drafting == path then
+    notify("the revision is still being written — wait for it, or :MentorStop", vim.log.levels.WARN)
+    return false
+  end
+
+  -- An open buffer wins over the file: it is what you were looking at, and it
+  -- may carry edits of your own. A `.new` saved to disk last time works too.
+  local rev_buf = vim.fn.bufnr(path)
+  local lines
+  if rev_buf ~= -1 and vim.api.nvim_buf_is_loaded(rev_buf) then
+    lines = vim.api.nvim_buf_get_lines(rev_buf, 0, -1, false)
+  elseif vim.fn.filereadable(path) == 1 then
+    lines = vim.fn.readfile(path)
+  else
+    notify(("no revision of %s to accept — :MentorRevision drafts one"):format(source.name),
+      vim.log.levels.WARN)
+    return false
+  end
+  if vim.trim(table.concat(lines, "\n")) == "" then
+    notify(("%s is empty — refusing to make %s empty too"):format(name, source.name),
+      vim.log.levels.WARN)
+    return false
+  end
+
+  local target_buf = vim.fn.bufnr(source.path)
+  if not force and target_buf ~= -1 and vim.bo[target_buf].modified then
+    -- `do` hunks taken from the revision are in there too, and taking all of
+    -- it supersedes those. But this cannot tell them from your own typing.
+    notify(("%s has unsaved changes — :w or :e! it first, or :MentorAccept! to take the revision over them")
+      :format(source.name), vim.log.levels.WARN)
+    return false
+  end
+
+  local write = cfg.context.project_brief_accept_write ~= false
+  local ok, err = brief.accept(lines, source.path, write)
+  if not ok then
+    notify(("could not write %s: %s"):format(source.name, err), vim.log.levels.ERROR)
+    return false
+  end
+
+  -- The revision is spent: its diff ends and `:Dg` goes with it. A `.new` on
+  -- disk is removed too — its text is now the brief, and leaving it would block
+  -- the next `:MentorRevision`.
+  if rev_buf ~= -1 then
+    brief.close_revision(rev_buf)
+  end
+  if vim.fn.filereadable(path) == 1 then
+    vim.fn.delete(path)
+  end
+
+  -- Retire only the notes this revision was asked to fold in.
+  local folded = M.state.revision_notes or {}
+  M.state.brief_notes = vim.tbl_filter(function(note)
+    return not vim.tbl_contains(folded, note)
+  end, M.state.brief_notes)
+  M.state.revision_notes = nil
+
+  notify(write
+    and ("%s updated from the revision — `u` in it undoes, `git diff` shows it"):format(source.name)
+    or ("%s now holds the revision, unsaved — `:w` keeps it"):format(source.name))
+  return true
+end
+
+--- The notes waiting for the next revision, in the panel.
+---@param args string "drop" to forget them
+function M.notes(args)
+  if args == "drop" or args == "clear" then
+    local n = #M.state.brief_notes
+    M.state.brief_notes = {}
+    notify(("dropped %d note%s"):format(n, n == 1 and "" or "s"))
+    return
+  end
+
+  ui.open(config.get().window)
+  ui.ensure_blank_line()
+  if #M.state.brief_notes == 0 then
+    ui.append("▍no notes for the brief pending\n\n")
+  else
+    local out = { "▍notes for the brief — /revise folds them in, /notes drop forgets them" }
+    for _, note in ipairs(M.state.brief_notes) do
+      out[#out + 1] = "- " .. note
+    end
+    ui.append(table.concat(out, "\n") .. "\n\n")
+  end
+  ui.scroll_to_end()
 end
 
 function M.stop()
@@ -464,6 +622,7 @@ function M.reset()
   M.state.briefed_stamp = nil
   M.state.shown_model = nil -- ...and re-states which model is answering
   M.state.conversation = nil -- ...and is saved as a conversation of its own
+  M.state.brief_notes = {} -- notes belong to the conversation that made them
   ui.set_pending(nil)
   ui.clear()
   notify("conversation reset")
@@ -490,6 +649,7 @@ local function restore(conv)
   -- is exactly when that is the right call.
   M.state.briefed_stamp = conv.briefed_stamp
   M.state.shown_model = conv.model
+  M.state.brief_notes = conv.brief_notes or {}
   M.state.pending_selection = nil
   M.state.conversation = conv
 
@@ -614,6 +774,18 @@ COMMANDS = {
   revise = {
     desc = "draft a revision of the project brief",
     run = function() M.revise() end,
+  },
+  accept = {
+    desc = "take the whole revision into the brief and save it",
+    -- Not `/accept!`: a command name is a bare word, and a `!` would make the
+    -- whole line a question about a mistyped command.
+    forms = { ["/accept force"] = "…even over unsaved edits to the brief" },
+    run = function(args) M.accept(args == "force") end,
+  },
+  notes = {
+    desc = "notes for the brief, pending the next /revise",
+    forms = { ["/notes drop"] = "forget them" },
+    run = function(args) M.notes(args) end,
   },
   reset = {
     desc = "start a new conversation",

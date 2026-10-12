@@ -39,6 +39,10 @@ cmd("MentorRevision", function()
   require("mentor").revise()
 end, { desc = "Draft a revision of the project brief beside it (you merge it)" })
 
+cmd("MentorAccept", function(a)
+  require("mentor").accept(a.bang)
+end, { bang = true, desc = "Take the whole brief revision, save the brief, close the revision" })
+
 cmd("MentorModel", function(a)
   require("mentor").set_model(a.args ~= "" and a.args or nil)
 end, {

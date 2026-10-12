@@ -66,6 +66,13 @@ function M.revise()
   session.revise()
 end
 
+--- Take the whole revision into the brief, save it, close the revision.
+---@param force boolean|nil even over unsaved edits to the brief
+---@return boolean accepted
+function M.accept(force)
+  return session.accept(force)
+end
+
 --- Point the active backend at a different model, from the next turn on.
 ---@param name string|nil omit to report the current one; "default" to unset
 ---@return string|nil model

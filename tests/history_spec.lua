@@ -55,6 +55,12 @@ h.eq("...counting up", saved[1].turns, 2)
 h.eq("the title is not rewritten", saved[1].title, "why is this wrong?")
 h.eq("the backend handle is stored", saved[1].provider_state.session_id, "sess-123")
 
+-- Notes for the brief wait for a /revise, which may be a later nvim away.
+session.state.brief_notes = { "Totals are rounded once." }
+ask("and the notes?")
+saved = session.saved()
+h.eq("pending brief notes are stored", saved[1].brief_notes[1], "Totals are rounded once.")
+
 h.eq("it is stored under the repo", vim.fn.isdirectory(store.dir(cfg.history, root)), 1)
 local mode = vim.fn.getfperm(saved[1].path)
 h.eq("readable only by you", mode, "rw-------")
@@ -79,6 +85,7 @@ session.resume("2")
 h.eq("resume restores the backend handle",
   session.state.provider_state.session_id, "sess-123")
 h.eq("...and the conversation it writes to", session.state.conversation.id, previous.id)
+h.eq("...and the notes it had pending", session.state.brief_notes[1], "Totals are rounded once.")
 
 local transcript = table.concat(ui.lines(), "\n")
 h.check("the panel shows the old conversation",
@@ -93,7 +100,7 @@ h.eq("the transcript is at its end",
 -- Resuming then asking must extend that conversation, not fork a third one.
 ask("carrying on")
 h.eq("the resumed conversation is the one that grows", #session.saved(), 2)
-h.eq("...by one turn", session.saved()[1].turns, 3)
+h.eq("...by one turn", session.saved()[1].turns, 4)
 
 h.check("a position that does not exist is refused", pcall(session.resume, "99"))
 

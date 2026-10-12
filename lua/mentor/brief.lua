@@ -14,6 +14,10 @@ local context = require("mentor.context")
 
 local M = {}
 
+--- Per revision buffer, how to end its diff (see `open_diff`).
+---@type table<integer, fun()>
+local teardowns = {}
+
 --- The brief file at the repo root, if there is one.
 ---
 --- Deliberately ignores `project_brief`: reading may be switched off, but
@@ -170,39 +174,39 @@ end
 ---
 --- A draft of a file that does not exist is finished by saving it. A revision
 --- of a file that does, is not: saving leaves you with two briefs and the merge
---- still to do. What you actually want is the good lines out of it and the file
---- itself gone, so the winbar names `do`/`dp` and offers `:q!` as the ending.
+--- still to do. The endings are `:MentorAccept` (all of it, saved, revision
+--- gone), `do` a hunk at a time then `:w` in the brief, or `:q!` to drop it —
+--- so those are what the winbar names.
 ---
---- Two spellings, because a diff of a document is a narrow window. A winbar
+--- Several spellings, because a diff of a document is a narrow window. A winbar
 --- longer than its window is not shortened, it is *scrolled* — vim shows the
 --- tail and hides the front, which is exactly where the key you need is
 --- written. So measure first and say less rather than say it off-screen.
 ---@param win integer
 ---@param target string the brief being revised
 ---@param diffing boolean whether the two are already side by side
----@param cmd string|nil the take-everything command, when there is one
-function M.mark_merge(win, target, diffing, cmd)
+function M.mark_merge(win, target, diffing)
   if not diffing then
-    set_winbar(win, ("mentor stopped writing — `:vert diffsplit %s` to compare, `:q!` discards this")
-      :format(target))
+    set_winbar(win, ("mentor stopped writing — `:MentorAccept` makes this %s, `:vert diffsplit %s` compares, `:q!` discards")
+      :format(target, target))
     return
   end
 
   -- Longest first; the widest one that fits wins. A diff of a document splits
   -- the screen twice over, so the narrow forms are the ones most people see.
-  -- With no take-all command the line names only what `do` can do: `:%diffget`
-  -- is not offered as a substitute, because it drops a trailing addition.
-  local forms = cmd and {
-    ((":%s takes all of it, `do` takes one hunk, `:w` in %s keeps them, `:q!` here discards this")
-      :format(cmd, target)),
-    ((":%s all · `do` hunk · `:w` %s keeps it · `:q!`"):format(cmd, target)),
-    ((":%s all · `do` hunk · `:w` %s · `:q!`"):format(cmd, target)),
-    ((":%s all · `do` hunk · `:w` · `:q!`"):format(cmd)),
-    ((":%s · do · :w · :q!"):format(cmd)),
-  } or {
-    ("`do` takes a hunk, `:w` in %s keeps it, `:q!` here discards this"):format(target),
-    ("`do` hunk · `:w` %s · `:q!`"):format(target),
-    "`do` · `:w` · `:q!`",
+  -- The take-all buffer command (`:Dg`) is left to the transcript: it leaves
+  -- the brief unsaved, so it is the half-way verb, and `:MentorAccept` is the
+  -- one worth the room.
+  local forms = {
+    ((":MentorAccept takes all of it and saves %s, `do` takes one hunk, `:q!` here discards this")
+      :format(target)),
+    ((":MentorAccept all · `do` hunk · `:w` %s · `:q!`"):format(target)),
+    ":MentorAccept all · `do` hunk · `:w` · `:q!`",
+    ":MentorAccept · do · :w · :q!",
+    ":MentorAccept · do · :q!",
+    -- `do` is stock vim and the transcript spells it out; the two endings only
+    -- this plugin knows are the ones that cannot be dropped.
+    ":MentorAccept · :q!",
   }
 
   local width = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_width(win) or 0
@@ -300,24 +304,123 @@ function M.open_diff(win, target_path, cmd)
   end
 
   local group = vim.api.nvim_create_augroup("mentor_diff_" .. buf, { clear = true })
+  local function teardown()
+    teardowns[buf] = nil
+    if vim.api.nvim_win_is_valid(target_win) then
+      vim.api.nvim_win_call(target_win, function()
+        vim.cmd("diffoff")
+      end)
+    end
+    if cmd then
+      remove_take_all(buf, cmd)
+      remove_take_all(target_buf, cmd)
+    end
+    pcall(vim.api.nvim_del_augroup_by_id, group)
+  end
+  teardowns[buf] = teardown
   vim.api.nvim_create_autocmd({ "BufWinLeave", "BufUnload" }, {
     group = group,
     buffer = buf,
-    callback = function()
-      if vim.api.nvim_win_is_valid(target_win) then
-        vim.api.nvim_win_call(target_win, function()
-          vim.cmd("diffoff")
-        end)
-      end
-      if cmd then
-        remove_take_all(buf, cmd)
-        remove_take_all(target_buf, cmd)
-      end
-      pcall(vim.api.nvim_del_augroup_by_id, group)
-    end,
+    callback = teardown,
   })
 
   return true
+end
+
+--- Close a revision for good: end its diff, close its windows, drop the buffer.
+---
+--- Runs the diff teardown itself rather than trusting the `BufWinLeave` that
+--- closing the window would fire — autocmds do not nest by default, so a caller
+--- that is itself inside one (a mapping on an event, a spec) would leave diff
+--- mode on in the brief and `:Dg` installed in it.
+---@param buf integer the revision
+function M.close_revision(buf)
+  if teardowns[buf] then
+    teardowns[buf]()
+  end
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    if #vim.api.nvim_list_wins() > 1 then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
+end
+
+--- Finish a revision in one step: the brief becomes the revision, the brief is
+--- saved, and the revision goes away.
+---
+--- This is the plugin writing `MENTOR.md`, and it is allowed for the same reason
+--- `:w` is — a human asked, by name, for this exact text to be kept, after it
+--- was put in front of them. The model has no part in it: no tool, no path of
+--- its choosing. The target is the brief `revision_path` found, never anything
+--- the revision says.
+---
+--- Copies whole lines for the reason `install_take_all` does: a range-based
+--- diffget drops a trailing addition. Goes through the loaded buffer rather than
+--- `writefile`, so `u` in the brief still undoes it and a window on the brief
+--- shows the new text without a reload prompt.
+---@param lines string[] the revision
+---@param target_path string the brief
+---@param write boolean save the brief, or leave it modified for you to `:w`
+---@return boolean ok, string|nil err
+function M.accept(lines, target_path, write)
+  local target = vim.fn.bufadd(target_path)
+  vim.fn.bufload(target)
+  vim.bo[target].modifiable = true
+  vim.api.nvim_buf_set_lines(target, 0, -1, false, lines)
+  if not write then
+    return true, nil
+  end
+  local ok, err = pcall(vim.api.nvim_buf_call, target, function()
+    vim.cmd("silent write")
+  end)
+  if not ok then
+    return false, tostring(err)
+  end
+  return true, nil
+end
+
+--- Things the mentor learned mid-conversation that the brief should say.
+---
+--- Read out of a reply's `## Brief notes` section — the format
+--- `prompts.note_instructions` asks for. The *last* such section wins, so a
+--- reply that quotes the format back while explaining it does not count twice.
+--- Capped in count and length: these are sentences for a revision to weigh, and
+--- a reply that tried to smuggle a document through here gets three short lines.
+---@param text string the reply
+---@return string[] notes
+function M.parse_notes(text)
+  local lines = vim.split(text or "", "\n", { plain = true })
+  local start = nil
+  for i = #lines, 1, -1 do
+    if lines[i]:lower():match("^%s*##%s+brief%s+notes?%s*$") then
+      start = i
+      break
+    end
+  end
+  if not start then
+    return {}
+  end
+
+  local notes = {}
+  for i = start + 1, #lines do
+    local line = lines[i]
+    local item = line:match("^%s*[%-%*]%s+(.+)$")
+    if item then
+      item = vim.trim(item)
+      if item ~= "" and #notes < 3 then
+        notes[#notes + 1] = item:sub(1, 300)
+      end
+    elseif vim.trim(line) ~= "" or #notes > 0 then
+      -- Blank lines between the heading and the list are fine; anything else,
+      -- or a blank after the list, is the end of it.
+      break
+    end
+  end
+  return notes
 end
 
 --- Nothing but the empty line `bufload` starts with — no model text, no edits

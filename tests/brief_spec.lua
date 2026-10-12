@@ -345,9 +345,31 @@ h.eq("the cursor lands in the brief", vim.api.nvim_get_current_win(), target_win
 local bar = vim.wo[rev_win].winbar
 -- Which spelling depends on how much room the split has, so assert the keys
 -- are named rather than how they are decorated.
-h.check("the winbar names the merge keys", bar:find("do", 1, true) ~= nil, bar)
-h.check("...and the way to take all of it", bar:find(":Dg", 1, true) ~= nil, bar)
-h.check("...and offers :q! as the ending", bar:find(":q!", 1, true) ~= nil, bar)
+h.check("the winbar names the way to take all of it",
+  bar:find(":MentorAccept", 1, true) ~= nil, bar)
+h.check("...and offers :q! as the other ending", bar:find(":q!", 1, true) ~= nil, bar)
+
+-- The panel is wide and says all of it, `:Dg` included.
+local said = table.concat(vim.api.nvim_buf_get_lines(ui.state.buf, 0, -1, false), "\n")
+h.check("the transcript names :MentorAccept", said:find(":MentorAccept", 1, true) ~= nil)
+h.check("...and :Dg", said:find(":Dg", 1, true) ~= nil)
+h.check("...and do", said:find("do ", 1, true) ~= nil)
+
+-- Measured, not assumed: the long form is used where it fits.
+brief.mark_merge(rev_win, "MENTOR.md", true)
+local function bar_at(width)
+  local saved = vim.api.nvim_win_get_width(rev_win)
+  vim.api.nvim_win_set_width(rev_win, width)
+  brief.mark_merge(rev_win, "MENTOR.md", true)
+  local got = vim.wo[rev_win].winbar
+  vim.api.nvim_win_set_width(rev_win, saved)
+  brief.mark_merge(rev_win, "MENTOR.md", true)
+  return got
+end
+-- As wide as the headless screen allows, which is not wide enough for the
+-- longest spelling but is for one that names the hunk key too.
+local wide = bar_at(vim.o.columns)
+h.check("a wider window names `do` as well", wide:find("`do`", 1, true) ~= nil, wide)
 h.check("...and does not tell you to :w the revision",
   bar:find(":w` keeps MENTOR.md.new", 1, true) == nil, bar)
 
@@ -429,6 +451,213 @@ get = h.stub_provider()
 session.init()
 settle()
 h.check("init still refuses when a brief exists", get() == nil)
+
+------------------------------------------------------------------ MentorAccept
+
+local function disk(path)
+  return table.concat(vim.fn.readfile(path), "\n")
+end
+local function quiet(fn)
+  local real = vim.notify
+  vim.notify = function() end
+  local ok, a = pcall(fn)
+  vim.notify = real
+  assert(ok, a)
+  return a
+end
+
+local brief_path = root .. "/MENTOR.md"
+local before_accept = disk(brief_path)
+
+h.eq("accept refuses with no revision to take", quiet(function() return session.accept() end), false)
+h.eq("...and leaves the brief alone", disk(brief_path), before_accept)
+
+-- Half a document is not one to accept.
+get = h.stub_provider()
+session.revise()
+h.eq("accept refuses while the revision is still streaming",
+  quiet(function() return session.accept() end), false)
+settle()
+
+rev_buf = buf_named(rev_path)
+local rev_wins = vim.fn.win_findbuf(rev_buf)
+target_win = win_showing(buf_named(brief_path))
+h.eq("accept takes a finished revision", session.accept(), true)
+h.eq("the brief on disk is the revision now", disk(brief_path), "ok")
+h.eq("the brief buffer is saved, not left modified",
+  vim.bo[buf_named(brief_path)].modified, false)
+h.check("the revision buffer is gone", buf_named(rev_path) == nil)
+h.check("...and its window", not vim.api.nvim_win_is_valid(rev_wins[1]))
+h.eq("no .new reached disk", vim.fn.filereadable(rev_path), 0)
+h.eq("diff mode is off in the brief's window", vim.wo[target_win].diff, false)
+h.check(":Dg went with the diff", vim.fn.getcompletion("Dg", "command")[1] == nil)
+
+-- The brief has edits of yours that taking all of it would overwrite.
+vim.fn.writefile({ "# Cart", "", "mine" }, brief_path)
+local tbuf = buf_named(brief_path)
+vim.api.nvim_buf_call(tbuf, function() vim.cmd("edit!") end)
+get = h.stub_provider()
+session.revise()
+settle()
+vim.api.nvim_buf_set_lines(tbuf, 0, -1, false, { "# Cart", "", "mine, unsaved" })
+h.eq("accept refuses over unsaved edits to the brief",
+  quiet(function() return session.accept() end), false)
+h.eq("...leaving them in the buffer", vim.api.nvim_buf_get_lines(tbuf, 2, 3, false)[1], "mine, unsaved")
+h.eq("force takes it anyway", session.accept(true), true)
+h.eq("...and saves", disk(brief_path), "ok")
+
+-- A revision emptied by hand is not one to make the brief out of.
+get = h.stub_provider()
+session.revise()
+settle()
+vim.api.nvim_buf_set_lines(buf_named(rev_path), 0, -1, false, { "", "  " })
+h.eq("accept refuses an empty revision", quiet(function() return session.accept() end), false)
+h.eq("...and the brief keeps its text", disk(brief_path), "ok")
+vim.api.nvim_buf_delete(buf_named(rev_path), { force = true })
+
+-- A `.new` someone saved last time is a revision too, and once taken it would
+-- otherwise block the next :MentorRevision forever.
+vim.fn.writefile({ "from a saved revision" }, rev_path)
+h.eq("accept takes a .new from disk", session.accept(), true)
+h.eq("...into the brief", disk(brief_path), "from a saved revision")
+h.eq("...and removes it", vim.fn.filereadable(rev_path), 0)
+
+-- Off switch for the save: the take still happens, the :w stays yours.
+require("mentor").setup({ context = { project_brief_accept_write = false } })
+get = h.stub_provider()
+session.revise()
+settle()
+h.eq("accept_write=false still accepts", session.accept(), true)
+h.eq("...without writing", disk(brief_path), "from a saved revision")
+h.eq("...leaving the brief modified", vim.bo[buf_named(brief_path)].modified, true)
+h.eq("...holding the revision", vim.api.nvim_buf_get_lines(buf_named(brief_path), 0, -1, false)[1], "ok")
+vim.api.nvim_buf_call(buf_named(brief_path), function() vim.cmd("edit!") end)
+require("mentor").setup({})
+
+h.check(":MentorAccept exists", vim.fn.exists(":MentorAccept") == 2)
+h.check("/accept is a panel command", vim.tbl_contains(
+  vim.tbl_map(function(i) return i.word end, session.commands()), "/accept"))
+
+-------------------------------------------------------------------- brief notes
+
+local parse = brief.parse_notes
+h.eq("no section, no notes", #parse("just an answer"), 0)
+local got_notes = parse(table.concat({
+  "An answer.",
+  "",
+  "## Brief notes",
+  "",
+  "- The cart total is rounded in one place only.",
+  "* Discounts are fractions, not percentages.",
+  "",
+  "## TODO(human)",
+  "- `cart.py:4` — decide what an empty cart totals.",
+}, "\n"))
+h.eq("both notes are read", #got_notes, 2)
+h.eq("...in order", got_notes[1], "The cart total is rounded in one place only.")
+h.check("...and the TODO section is not one of them",
+  not vim.tbl_contains(got_notes, "`cart.py:4` — decide what an empty cart totals."))
+h.eq("at most three", #parse("## Brief notes\n- a\n- b\n- c\n- d\n- e"), 3)
+h.eq("each is capped", #parse("## Brief notes\n- " .. ("x"):rep(1000))[1], 300)
+h.eq("the last section wins",
+  parse("## Brief notes\n- old\n\ntext\n\n## brief note\n- new")[1], "new")
+
+-- A provider that answers with whatever the test wants.
+local function answering(text)
+  local captured
+  require("mentor.provider").resolve = function()
+    return {
+      display_name = "stub",
+      available = function() return true end,
+      chat = function(o)
+        captured = o
+        vim.schedule(function()
+          o.on_delta(text)
+          o.on_done()
+        end)
+        return { kind = nil, kill = function() end }
+      end,
+    }, "claude_cli", nil
+  end
+  return function() return captured end
+end
+
+vim.fn.writefile({ "# Cart", "", "A teaching fixture." }, brief_path)
+vim.api.nvim_buf_call(buf_named(brief_path), function() vim.cmd("edit!") end)
+session.reset()
+
+get = answering("Rounding happens last.\n\n## Brief notes\n- Totals are rounded once, at the end.\n")
+session.ask("where is rounding?")
+settle()
+h.check("a briefed turn asks for notes",
+  get().system:find("## Brief notes", 1, true) ~= nil)
+h.eq("the note is collected", session.state.brief_notes[1], "Totals are rounded once, at the end.")
+h.check("the panel says one is pending",
+  table.concat(ui.lines(), "\n"):find("note for the brief pending", 1, true) ~= nil)
+h.eq("collecting is all it does: the brief is untouched",
+  disk(brief_path), "# Cart\n\nA teaching fixture.")
+
+session.ask("and again?")
+settle()
+h.eq("the same note is not collected twice", #session.state.brief_notes, 1)
+
+get = h.stub_provider()
+session.revise()
+settle()
+req = get()
+h.check("revise carries the pending notes",
+  req.prompt:find("<brief_notes>", 1, true) ~= nil, req.prompt)
+h.check("...with their text",
+  req.prompt:find("Totals are rounded once", 1, true) ~= nil)
+h.check("a draft does not ask for notes about itself",
+  req.system:find("## Brief notes", 1, true) == nil)
+
+-- A note arriving while you read the revision did not go into it.
+get = answering("## Brief notes\n- Discounts are fractions.\n")
+session.ask("what is discount?")
+settle()
+h.eq("two notes pending", #session.state.brief_notes, 2)
+h.eq("accepting the revision", session.accept(), true)
+h.eq("...retires the note it folded in, and only that one",
+  session.state.brief_notes[1], "Discounts are fractions.")
+h.eq("...leaving one", #session.state.brief_notes, 1)
+
+session.notes("drop")
+h.eq("/notes drop forgets them", #session.state.brief_notes, 0)
+
+require("mentor").setup({ context = { project_brief_notes = false } })
+get = h.stub_provider()
+session.ask("notes off")
+settle()
+h.check("project_brief_notes=false stops asking",
+  get().system:find("## Brief notes", 1, true) == nil)
+require("mentor").setup({})
+
+get = answering("## Brief notes\n- Something.\n")
+session.ask("one more")
+settle()
+session.reset()
+h.eq("reset drops the notes with the conversation", #session.state.brief_notes, 0)
+
+vim.fn.delete(brief_path)
+get = h.stub_provider()
+session.ask("no brief at all")
+settle()
+h.check("with no brief there is nothing to take notes against",
+  get().system:find("## Brief notes", 1, true) == nil)
+
+-- Accepting leaves you in the brief, on purpose, so every revision above left a
+-- window on it. Put the layout back the way the sections below expect it.
+local leftover = buf_named(brief_path)
+if leftover then
+  for _, w in ipairs(vim.fn.win_findbuf(leftover)) do
+    if #vim.api.nvim_list_wins() > 1 then
+      vim.api.nvim_win_close(w, true)
+    end
+  end
+  vim.api.nvim_buf_delete(leftover, { force = true })
+end
+vim.fn.writefile({ "# Cart" }, brief_path)
 
 vim.fn.delete(dir .. "/MENTOR.md")
 

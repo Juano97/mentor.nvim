@@ -135,6 +135,14 @@ M.defaults = {
     -- because merging the two is the point and `:w` on the draft is not. Set
     -- false to get the draft in a plain split and diff it yourself.
     project_brief_diff = true,
+    -- :MentorAccept (/accept in the panel) takes the whole revision into the
+    -- brief, closes the revision, and saves the brief. Set false to have it
+    -- stop short of the save and leave `:w` to you.
+    project_brief_accept_write = true,
+    -- Replies may end with a `## Brief notes` section naming what the brief is
+    -- missing. They are only collected — /revise folds them into a draft you
+    -- diff and accept. Set false to stop asking for them.
+    project_brief_notes = true,
   },
 
   ---------------------------------------------------------------------------

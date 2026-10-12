@@ -56,6 +56,7 @@ Then `:checkhealth mentor` to confirm the backend and the sandbox settings.
 | `:MentorReview` | `<leader>mr` | Review your most recent changes |
 | `:MentorInit` | — | Draft a project brief for this repo; you review and save it |
 | `:MentorRevision` | — | Draft a revision of that brief beside it; you diff and merge it |
+| `:MentorAccept[!]` | — | Take the whole revision into the brief, save it, close the revision |
 | `:MentorModel [name]` | — | Show or switch the model; no argument reports the current one |
 | `:MentorStop` | `<leader>ms` | Cancel the answer in flight |
 | `:MentorReset` | `<leader>mx` | Drop the conversation and clear the panel |
@@ -95,7 +96,11 @@ the transcript:
 | `/resume` | Pick the most recent conversation back up |
 | `/resume 2` | …or the second most recent |
 | `/resume list` | Choose from all of them |
-| `/revise` | Draft a revision of the project brief |
+| `/revise` | Draft a revision of the project brief, folding in any pending notes |
+| `/accept` | Take the whole revision into the brief and save it |
+| `/accept force` | …even over unsaved edits to the brief |
+| `/notes` | List the notes for the brief the mentor has collected |
+| `/notes drop` | Forget them |
 | `/reset` | Start a new conversation |
 | `/stop` | Cancel the answer in flight |
 
@@ -323,9 +328,50 @@ propose the update, `:MentorRevision` — or `/revise` in the input box — draf
   → MENTOR.md.new fills in as it streams, unsaved
   → when it lands, the two open side by side in diff mode,
     cursor in MENTOR.md
-  → ]c to the next change, do to take it, :w when you are happy
-  → :q! the revision — it was never a file
+  → :MentorAccept if you want all of it: MENTOR.md becomes the
+    revision, is saved, and the revision closes
+  → or ]c to the next change, do to take it, :w when you are happy,
+    then :q! the revision — it was never a file
 ```
+
+`:MentorAccept` — `/accept` in the input box — is the one-step ending. It copies
+the whole revision into `MENTOR.md`, saves it, ends the diff and drops the
+revision. It is the one time the plugin writes your brief, and it is still a
+command you type with the diff in front of you: `:w` with fewer steps, not
+something the model can reach. `u` in the brief undoes it, and `git diff` shows
+it. It refuses while the revision is still streaming, when the revision is empty,
+and when the brief has unsaved edits it would overwrite — `:MentorAccept!` takes
+it over those. A `MENTOR.md.new` saved to disk last time is accepted too, and
+removed once its text is the brief. Set
+`context = { project_brief_accept_write = false }` to have it stop short of the
+save.
+
+### Notes from the conversation
+
+When a reply turns up something the brief should say and does not — an
+invariant you just traced, a decision you stated — the mentor ends it with a
+short section:
+
+```
+## Brief notes
+- Totals are rounded once, at the end, in cart.py; rounding earlier double-counts.
+```
+
+The panel then says a note is pending. Nothing else happens: notes are only
+collected. The next `/revise` hands them to the model with the brief, to fold in
+where they belong or leave out if the project does not bear them out, and you
+read the result in the same diff as any revision. Accepting it retires the notes
+it carried; ones that arrived while you were reading wait for the next one.
+`/notes` lists what is pending, `/notes drop` forgets it, and they are saved with
+the conversation, so `:MentorResume` brings them back. They are only asked for
+when there is a brief to measure them against.
+`context = { project_brief_notes = false }` stops asking.
+
+Why not let the mentor just edit the file? Because the brief is fed back into
+every conversation. A model that could write it could be talked into writing it
+by whatever it happened to read — a file in a dependency, a comment in a diff —
+and that text would then ride into every session after. Routing notes through a
+revision you read keeps that from ever being one step.
 
 When the revision is simply better and you do not want to read it hunk by hunk,
 `:Dg` — or `:dg`, which abbreviates to it — takes the whole thing. It works from
@@ -348,9 +394,6 @@ brief, by hand, in the window you were reading. Then `:q!` the revision and
 nothing extra ever reached disk. The winbar over the draft says exactly this
 while you work.
 
-Want the whole thing? `:sav! MENTOR.md` from the revision buffer replaces the
-brief outright — still your keystroke, still your call.
-
 Set `context = { project_brief_diff = false }` to get the draft in a plain split
 and run `:vert diffsplit MENTOR.md` yourself. Closing the revision turns diff
 mode back off in the window it opened.
@@ -358,8 +401,8 @@ mode back off in the window it opened.
 Same bargain as `:MentorInit` and the same refusals: it will not run when there
 is no brief to revise (that is `:MentorInit`), when an unsaved revision is
 already open, or when a `MENTOR.md.new` is sitting on disk from last time. Your
-`MENTOR.md` is never written by the plugin — merging the two is yours, and
-`.new` is not a filename it will ever read as a brief.
+`MENTOR.md` is never written except by `:MentorAccept` — and `.new` is not a
+filename it will ever read as a brief.
 
 Unlike the copy sent with each conversation, the revision is handed the brief
 *whole*, ignoring `max_brief_lines` — a model revising a document it only saw
@@ -411,6 +454,10 @@ require("mentor").setup({
     -- Re-send it mid-conversation when the file changes; false freezes the
     -- copy sent at the start.
     project_brief_refresh = true,
+    -- :MentorAccept saves the brief; false leaves the :w to you.
+    project_brief_accept_write = true,
+    -- Collect "## Brief notes" from replies for the next /revise.
+    project_brief_notes = true,
   },
 
   -- Saved conversations, for :MentorResume. save=false keeps them in memory.
@@ -491,7 +538,7 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 | `ui_spec` | Busy winbar and spinner, selection attach/clear, range clamping |
 | `todo_spec` | TODO parsing, last-block scoping, the on/off toggle, paths fenced to the repo, comment-breakout stripping |
 | `model_spec` | Model selection per backend, runtime switching, transcript labelling |
-| `brief_spec` | Brief discovery and precedence, sent once per conversation and again when edited, `:MentorInit` drafting to a buffer and not to disk, `:MentorRevision` drafting beside it |
+| `brief_spec` | Brief discovery and precedence, sent once per conversation and again when edited, `:MentorInit` drafting to a buffer and not to disk, `:MentorRevision` drafting beside it, `:MentorAccept` taking it, brief notes collected and folded into the next revision |
 | `history_spec` | Saving a conversation per turn, resuming one, pruning, a session the backend dropped |
 | `commentstring_spec` | Comment syntax per language, indentation, bottom-up ordering |
 | `e2e_spec` | Live round-trip; asserts the model changed nothing on disk |

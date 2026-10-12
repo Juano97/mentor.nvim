@@ -550,6 +550,7 @@ plus a fixture that builds a throwaway git repo with a real uncommitted diff.
 | `todo_spec` | TODO parsing, last-block scoping, the on/off toggle, paths fenced to the repo, comment-breakout stripping |
 | `model_spec` | Model selection per backend, runtime switching, transcript labelling |
 | `brief_spec` | Brief discovery and precedence, sent once per conversation and again when edited, `:MentorInit` drafting to a buffer and not to disk, `:MentorRevision` drafting beside it, `:MentorAccept` taking it, brief notes collected and folded into the next revision |
+| `layout_spec` | Drafts and revisions open beside your code, never in the panel or a sidebar, wherever you launched them from |
 | `history_spec` | Saving a conversation per turn, resuming one, pruning, a session the backend dropped |
 | `commentstring_spec` | Comment syntax per language, indentation, bottom-up ordering |
 | `e2e_spec` | Live round-trip; asserts the model changed nothing on disk |

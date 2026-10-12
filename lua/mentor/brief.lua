@@ -332,6 +332,12 @@ function M.open_diff(win, target_path, cmd, wq)
   end
   local target_win = vim.api.nvim_get_current_win()
 
+  -- `:vsplit` halves the window it splits, but vim takes the room from its
+  -- neighbours too when they are narrow, and the two halves can come out very
+  -- uneven. They are read line against line, so give them the same width.
+  local both = vim.api.nvim_win_get_width(win) + vim.api.nvim_win_get_width(target_win)
+  pcall(vim.api.nvim_win_set_width, target_win, math.floor(both / 2))
+
   -- Diff mode changes fold and wrap settings, and the window it changed them
   -- in is one we opened. Closing the revision is the end of the comparison, so
   -- it is also the end of diff mode.
@@ -503,11 +509,20 @@ local function host_win()
   local code = context.code_buf()
   local fallback = nil
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if win ~= ui.state.win and win ~= ui.state.input_win then
-      if code and vim.api.nvim_win_get_buf(win) == code then
+    -- Never a float (a picker, a notification, the autocmd window) and never
+    -- the panel. Splitting a float puts the new window wherever the float's
+    -- owner decides, which is how a draft once landed under the input box.
+    local normal = vim.api.nvim_win_get_config(win).relative == ""
+    if normal and win ~= ui.state.win and win ~= ui.state.input_win then
+      local buf = vim.api.nvim_win_get_buf(win)
+      if code and buf == code then
         return win
       end
-      fallback = fallback or win
+      -- Second choice is any window on a real file. A file explorer or a
+      -- terminal is a sidebar, and some of them move focus on entry.
+      if not fallback and context.is_code_buf(buf) then
+        fallback = win
+      end
     end
   end
   return fallback
@@ -520,6 +535,10 @@ end
 ---@param path string
 ---@return integer bufnr, integer winid
 function M.open_draft(path)
+  -- Before the buffer exists: loading it can fire BufEnter (see
+  -- `context.track`), and the host is wherever you were, not wherever that left.
+  local host = host_win()
+
   local buf = vim.fn.bufadd(path)
   vim.fn.bufload(buf)
 
@@ -535,8 +554,7 @@ function M.open_draft(path)
   -- and a draft you cannot see in it is a draft you cannot find again.
   vim.bo[buf].buflisted = true
 
-  local host = host_win()
-  if host then
+  if host and vim.api.nvim_win_is_valid(host) then
     vim.api.nvim_set_current_win(host)
   end
   vim.cmd("split")

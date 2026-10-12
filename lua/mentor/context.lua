@@ -32,6 +32,9 @@ local function is_code_buf(buf)
   return not vim.api.nvim_buf_get_name(buf):match("^mentor://")
 end
 
+--- A real file buffer: not the panel, not a sidebar, picker or terminal.
+M.is_code_buf = is_code_buf
+
 --- Filetype of a buffer, inferred from the name when detection has not run
 --- (a buffer loaded via bufadd()/bufload() has no filetype set).
 ---@param buf integer
@@ -49,6 +52,15 @@ local function buf_filetype(buf)
 end
 
 function M.track()
+  -- Only a buffer entered in an ordinary window. `bufload()` can run filetype
+  -- and plugin autocmds in nvim's hidden autocommand window, which is a float,
+  -- and the BufEnter that fires there is not the user going anywhere. Taking it
+  -- at its word made a freshly loaded draft "the last code buffer" — a buffer
+  -- no window shows, so the draft's host fell through to whatever window came
+  -- first, a file explorer included. Floating pickers are not workplaces either.
+  if vim.api.nvim_win_get_config(0).relative ~= "" then
+    return
+  end
   local buf = vim.api.nvim_get_current_buf()
   if is_code_buf(buf) then
     M.last_code_buf = buf

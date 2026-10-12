@@ -61,6 +61,19 @@ has an input box, the cursor is *in the panel* when a question is sent. So
 `WinEnter` autocmd, and `mentor://` buffers are excluded. Anything that reads
 "where is the user working" must go through `code_buf()`.
 
+The tracker ignores anything entered in a floating window. `bufload()` can run
+plugin and filetype autocmds in nvim's hidden autocommand window, which is a
+float, and the `BufEnter` that fires there is not the user going anywhere.
+Before this was guarded, loading a draft made the draft "the last code buffer".
+No window showed it, so `brief.host_win` fell back to the first window in the
+list: the Snacks explorer, which moves focus into its popup on entry. The draft
+was then split from there and landed in the panel's column. It only happened
+with the cursor in the panel, because otherwise the current buffer is checked
+first. `host_win` is picked *before* `bufadd`, skips floats, and its fallback is
+a window on a real file, never a sidebar. `tests/layout_spec.lua` pins all
+three. A headless nvim with the real user config (`nvim --headless --listen`,
+no `--clean`) reproduces plugin interactions like this one.
+
 **The transcript buffer is `modifiable = false` at rest.** `append()` flips it
 on and back off. Never leave it writable.
 

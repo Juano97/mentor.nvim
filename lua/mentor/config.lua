@@ -10,7 +10,10 @@ M.defaults = {
     min_width = 34,
     position = "right", -- "right" | "left"
     wrap = true,
-    input_height = 5, -- lines in the input box below the transcript
+    -- Lines in the input box below the transcript. It holds this height when
+    -- other windows open and close; resize it by hand and it holds that one
+    -- instead, until you restart.
+    input_height = 5,
     -- Toggling the panel open puts the cursor in the input box and starts
     -- insert. Set false to have :Mentor only reveal the panel.
     focus_on_open = true,

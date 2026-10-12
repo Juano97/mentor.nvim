@@ -10,6 +10,11 @@ M.state = {
   pending = nil, -- label for an attached selection
   timer = nil,
   frame = 1,
+  -- The input box's height once you have resized it by hand; nil means
+  -- `window.input_height`. Kept across closing and reopening the panel, for
+  -- the rest of the session.
+  input_height = nil,
+  layout = nil, -- the windows in the tab when the box was last checked
 }
 
 local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
@@ -144,6 +149,67 @@ end
 ---
 --- The flag collapses a burst of events into a single correction — a mouse
 --- wheel emits a stream of them.
+--- Put the input box back to its configured height, the transcript taking up
+--- whatever the change leaves.
+---
+--- `winfixheight` is a preference, not a guarantee: when a window opens or
+--- closes across the whole width — a terminal at the bottom, a quickfix list —
+--- vim hands the rows it takes or frees to the bottom window of every column,
+--- and in the panel's column that is the input box. Opening a terminal
+--- squeezed it to one line and closing it again left it twenty lines tall, with
+--- the transcript stuck at half the screen above it. The height it goes back
+--- to is `input_height`, or the one you last gave it by hand — telling those
+--- two kinds of resize apart is `sync_input_height`'s job.
+---@param height integer
+function M.keep_input_height(height)
+  local iwin = M.state.input_win
+  if not (valid_win(iwin) and valid_win(M.state.win)) then
+    return
+  end
+  if vim.api.nvim_win_get_height(iwin) ~= height then
+    pcall(vim.api.nvim_win_set_height, iwin, height)
+  end
+end
+
+--- The ordinary windows in this tab, as a string that changes exactly when
+--- one opens or closes.
+---@return string
+local function layout_key()
+  local wins = vim.tbl_filter(function(w)
+    return vim.api.nvim_win_get_config(w).relative == ""
+  end, vim.api.nvim_tabpage_list_wins(0))
+  table.sort(wins)
+  return table.concat(wins, ",")
+end
+
+--- After a resize: put the box back, or learn that you meant it.
+---
+--- The resize event says only that the box changed height, never why, and a
+--- border you dragged looks exactly like a terminal that opened. What differs
+--- is the window list. A terminal, a quickfix list or a split opening or
+--- closing changes which windows exist; `<C-w>+`, `:resize` and a mouse drag
+--- change sizes and nothing else. So with the same windows as last time, the
+--- new height is yours and becomes the one kept. With different windows it is
+--- a side effect, and the box goes back. A resize of nvim itself is always a
+--- side effect.
+---@param default integer `window.input_height`
+---@param vim_resized boolean|nil
+function M.sync_input_height(default, vim_resized)
+  local iwin = M.state.input_win
+  if not (valid_win(iwin) and valid_win(M.state.win)) then
+    return
+  end
+  local key = layout_key()
+  local want = M.state.input_height or default
+  local now = vim.api.nvim_win_get_height(iwin)
+  if not vim_resized and key == M.state.layout and now ~= want then
+    M.state.input_height = now
+  else
+    M.keep_input_height(want)
+  end
+  M.state.layout = key
+end
+
 local clamp_queued = false
 local function clamp_scroll_soon()
   if clamp_queued then
@@ -354,7 +420,7 @@ function M.open(cfg)
   vim.cmd("belowright split")
   local iwin = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(iwin, input)
-  vim.api.nvim_win_set_height(iwin, cfg.input_height or 5)
+  vim.api.nvim_win_set_height(iwin, M.state.input_height or cfg.input_height or 5)
 
   for _, w in ipairs({ win, iwin }) do
     local wo = vim.wo[w]
@@ -373,9 +439,37 @@ function M.open(cfg)
   M.state.win = win
   M.state.input_win = iwin
 
+  local group = vim.api.nvim_create_augroup("mentor_panel", { clear = true })
+
+  -- Every resize, not only ones that name a panel window: the box is resized
+  -- as a side effect of some other window opening or closing. Scheduled for
+  -- the reason the scroll clamp is — whatever triggered the resize may still
+  -- be laying windows out when the event fires.
+  local height = cfg.input_height or 5
+  local resize_queued = false
+  local vim_resized = false
+  M.state.layout = layout_key()
+  vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+    group = group,
+    callback = function(args)
+      -- Several events can land before the scheduled check runs; if any of
+      -- them was nvim itself resizing, the check has to know.
+      vim_resized = vim_resized or args.event == "VimResized"
+      if resize_queued then
+        return
+      end
+      resize_queued = true
+      vim.schedule(function()
+        resize_queued = false
+        local whole = vim_resized
+        vim_resized = false
+        M.sync_input_height(height, whole)
+      end)
+    end,
+  })
+
   -- Only the transcript. The input box is one you type into, so its view has to
   -- follow the cursor, and a clamp would fight that.
-  local group = vim.api.nvim_create_augroup("mentor_panel", { clear = true })
   if not cfg.scroll_past_end then
     vim.api.nvim_create_autocmd("WinScrolled", {
       group = group,

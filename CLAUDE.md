@@ -123,6 +123,28 @@ driven over `--listen` + `--remote-send`, which is the way to check it again:
 `complete_info()` and `getline(".")` after each key tell you what a real user
 would see, and it is how the auto-insert bug was found in the first place.
 
+**The input box holds its height; the transcript absorbs the change.**
+`winfixheight` is not enough. When a window opens or closes across the full
+width (the Snacks terminal is `botright`), vim takes or returns rows at the
+bottom window of every column, and in the panel's column that is the input box.
+It went to 1 line with a terminal open and to 20 after closing it.
+`ui.sync_input_height` sets it back from a scheduled `WinResized`/`VimResized`
+autocmd in the `mentor_panel` group. It is scheduled for the same reason the
+clamp below is.
+
+It does not undo a resize the user made. The event never says why the box
+changed, and a dragged border looks the same as a terminal opening. The window
+list is what tells them apart: a side effect comes from a window opening or
+closing, while `<C-w>+`, `:resize` or a mouse drag only change sizes. So if the
+box changed height and the windows are the same as at the last check
+(`state.layout`), the new height becomes `state.input_height` and is kept for
+the rest of the session, across panel toggles. If the windows changed, or nvim
+itself was resized, the box goes back. Never collapse this back into "always
+restore `input_height`". That version fought every hand resize. Unlike `WinScrolled`, `WinResized` *does* fire in a headless
+nvim driven over `--listen`, so the real layout can be checked there. In
+`ui_spec` it still cannot fire, because the spec runs inside `VimEnter`, so the
+spec makes the layout change itself and calls `sync_input_height`.
+
 **The scroll clamp has to run a tick late.** `WinScrolled` on the transcript
 window pulls the view back so the last line stays on the bottom row. Correcting
 inside the callback works for `<C-e>` and silently does nothing for `<C-f>`,

@@ -67,6 +67,73 @@ h.eq("scroll_past_end opts out", #scroll_autocmds(ui.state.win), 0)
 ui.close()
 ui.open(cfg.window)
 
+---------------------------------------------------------- input box height
+
+-- A window opened or closed across the whole width resizes the bottom window of
+-- every column, and in the panel's that is the input box. The event that fixes
+-- it fires from the main loop, so drive the layout change here and run the
+-- check the way the autocmd does.
+local function resize_autocmds()
+  return vim.api.nvim_get_autocmds({ group = "mentor_panel", event = "WinResized" })
+end
+h.eq("resizes are watched", #resize_autocmds(), 1)
+
+local want = cfg.window.input_height
+local function box()
+  return vim.api.nvim_win_get_height(ui.state.input_win)
+end
+h.eq("the box starts at input_height", box(), want)
+local chat_before = vim.api.nvim_win_get_height(ui.state.win)
+
+local prev = vim.api.nvim_get_current_win()
+local function terminal_open()
+  vim.cmd("botright split")
+  local bottom = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_height(bottom, math.floor(vim.o.lines / 2))
+  ui.sync_input_height(want)
+  return bottom
+end
+local function terminal_close(bottom)
+  vim.api.nvim_win_close(bottom, true)
+  vim.api.nvim_set_current_win(prev)
+  local grew = box()
+  ui.sync_input_height(want)
+  return grew
+end
+
+local bottom = terminal_open()
+h.eq("a full-width split does not squeeze the box", box(), want)
+local grew = terminal_close(bottom)
+h.eq("closing it does not leave the box tall", box(), want,
+  ("it was %d before the fix"):format(grew))
+h.eq("...the transcript gets the room back", vim.api.nvim_win_get_height(ui.state.win), chat_before)
+
+-- Same windows, different height: that is a hand on the border, not a side
+-- effect, and putting it back would be the plugin fighting you.
+vim.api.nvim_win_set_height(ui.state.input_win, want + 4)
+ui.sync_input_height(want)
+h.eq("a resize by hand is kept", box(), want + 4)
+h.eq("...and remembered", ui.state.input_height, want + 4)
+
+bottom = terminal_open()
+h.eq("a full-width split then keeps that height", box(), want + 4)
+terminal_close(bottom)
+h.eq("...and so does closing it", box(), want + 4)
+
+-- nvim itself resizing is never a hand on the border.
+vim.api.nvim_win_set_height(ui.state.input_win, 2)
+ui.sync_input_height(want, true)
+h.eq("a resize of nvim puts the remembered height back", box(), want + 4)
+
+ui.close()
+ui.open(cfg.window)
+h.eq("reopening the panel uses the remembered height", box(), want + 4)
+
+ui.state.input_height = nil
+ui.close()
+ui.open(cfg.window)
+h.eq("with nothing remembered it is input_height again", box(), want)
+
 ------------------------------------------------------------------ selection
 
 local visual = vim.tbl_filter(function(m)

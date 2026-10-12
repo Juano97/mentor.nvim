@@ -139,6 +139,10 @@ M.defaults = {
     -- brief, closes the revision, and saves the brief. Set false to have it
     -- stop short of the save and leave `:w` to you.
     project_brief_accept_write = true,
+    -- During a revision, `:wq` ends the merge: in the revision it is
+    -- :MentorAccept, in the brief it saves what you took; both windows close.
+    -- Set false for stock `:wq` (which, in the revision, writes MENTOR.md.new).
+    project_brief_wq = true,
     -- Replies may end with a `## Brief notes` section naming what the brief is
     -- missing. They are only collected — /revise folds them into a draft you
     -- diff and accept. Set false to stop asking for them.

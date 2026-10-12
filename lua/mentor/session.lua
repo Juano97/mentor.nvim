@@ -424,6 +424,7 @@ function M.revise()
   end
 
   local diff = cfg.context.project_brief_diff ~= false
+  local wq = cfg.context.project_brief_wq ~= false
   local take = cfg.context.project_brief_diff_cmd
   if take == false or take == "" then
     take = nil
@@ -447,7 +448,7 @@ function M.revise()
         source.name, name),
     on_drafted = function(_, win)
       local brief = require("mentor.brief")
-      local diffing = diff and brief.open_diff(win, source.path, take)
+      local diffing = diff and brief.open_diff(win, source.path, take, wq)
       brief.mark_merge(win, source.name, diffing)
 
       -- The winbar says this too, but it is one line in a window narrow enough
@@ -462,6 +463,10 @@ function M.revise()
         }
         if take then
           keys[#keys + 1] = ("%-14s take all of it, leave %s unsaved"):format(":" .. take, source.name)
+        end
+        if wq then
+          keys[#keys + 1] = ("%-14s in the revision: as :MentorAccept, then close both"):format(":wq")
+          keys[#keys + 1] = ("%-14s in %s: save what you took, close both"):format(":wq", source.name)
         end
         vim.list_extend(keys, {
           ("%-12s take the hunk under the cursor"):format("do"),
@@ -488,6 +493,8 @@ function M.revise()
   end
 end
 
+local take -- forward declaration: `accept` and `finish_merge` both end there
+
 --- Finish a revision: the brief becomes the revision, saved, and the revision
 --- buffer goes.
 ---
@@ -500,6 +507,73 @@ end
 ---@param force boolean|nil
 ---@return boolean accepted
 function M.accept(force)
+  return take(force, config.get().context.project_brief_accept_write ~= false)
+end
+
+--- `:wq` in either half of a revision's diff: end the merge, both windows.
+---
+--- From the revision it means "keep this", which is `:MentorAccept`. From the
+--- brief it means "keep what I took" — the brief is saved as it stands and the
+--- revision is dropped. Either way it writes, whatever `accept_write` says:
+--- `:wq` is a request to write, typed by hand. And either way nothing lands in
+--- `MENTOR.md.new`, which is what a stock `:wq` in the revision would do.
+---@param from_revision boolean
+---@return boolean finished
+function M.finish_merge(from_revision)
+  local cfg = config.get()
+  local brief = require("mentor.brief")
+
+  local path, _, source = brief.revision_path(cfg.context)
+  if not source then
+    notify("no project brief here", vim.log.levels.WARN)
+    return false
+  end
+  if M.state.drafting == path then
+    notify("the revision is still being written — wait for it, or :MentorStop", vim.log.levels.WARN)
+    return false
+  end
+
+  local rev_buf = vim.fn.bufnr(path)
+  local half = rev_buf ~= -1 and brief.diff_of(rev_buf) or nil
+
+  if from_revision then
+    if not take(false, true) then
+      return false
+    end
+  else
+    local target = half and half.buf or vim.fn.bufnr(source.path)
+    if target == -1 then
+      notify(("%s is not open"):format(source.name), vim.log.levels.WARN)
+      return false
+    end
+    local ok, err = pcall(vim.api.nvim_buf_call, target, function()
+      vim.cmd("silent write")
+    end)
+    if not ok then
+      notify(("could not write %s: %s"):format(source.name, tostring(err)), vim.log.levels.ERROR)
+      return false
+    end
+    if rev_buf ~= -1 then
+      brief.close_revision(rev_buf)
+    end
+    -- What was not taken is dropped with the revision, so the notes it was
+    -- carrying cannot be called folded in. They stay for the next one.
+    M.state.revision_notes = nil
+    notify(("%s saved as merged — revision closed"):format(source.name))
+  end
+
+  -- The `q` of `:wq`: the brief's window was opened for the diff, so it goes
+  -- too — unless it is the last one, which `:wq` would have meant quitting nvim.
+  if half and vim.api.nvim_win_is_valid(half.win) and #vim.api.nvim_list_wins() > 1 then
+    pcall(vim.api.nvim_win_close, half.win, false)
+  end
+  return true
+end
+
+---@param force boolean|nil
+---@param write boolean
+---@return boolean accepted
+take = function(force, write)
   local cfg = config.get()
   local brief = require("mentor.brief")
 
@@ -541,7 +615,6 @@ function M.accept(force)
     return false
   end
 
-  local write = cfg.context.project_brief_accept_write ~= false
   local ok, err = brief.accept(lines, source.path, write)
   if not ok then
     notify(("could not write %s: %s"):format(source.name, err), vim.log.levels.ERROR)

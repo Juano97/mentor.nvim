@@ -346,6 +346,15 @@ removed once its text is the brief. Set
 `context = { project_brief_accept_write = false }` to have it stop short of the
 save.
 
+`:wq` ends the merge too, from either window, and closes both. In the revision
+it is `:MentorAccept`. In `MENTOR.md` it saves what you took with `do` and drops
+the rest. A stock `:wq` in the revision would write `MENTOR.md.new`, which is the
+one file this flow exists never to create, so the meaning is borrowed for the
+length of the diff. It is a buffer-local abbreviation in those two buffers only,
+it fires only on a command line that is exactly `wq`, and it goes away when the
+revision closes. `:wq` always writes, even with `project_brief_accept_write =
+false`. Set `context = { project_brief_wq = false }` to keep stock `:wq`.
+
 ### Notes from the conversation
 
 When a reply turns up something the brief should say and does not — an
@@ -456,6 +465,8 @@ require("mentor").setup({
     project_brief_refresh = true,
     -- :MentorAccept saves the brief; false leaves the :w to you.
     project_brief_accept_write = true,
+    -- During a revision, :wq in either window ends the merge; false for stock.
+    project_brief_wq = true,
     -- Collect "## Brief notes" from replies for the next /revise.
     project_brief_notes = true,
   },

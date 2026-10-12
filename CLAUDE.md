@@ -191,6 +191,22 @@ the brief unless `!` — `do` hunks and the user's own typing look the same from
 here, so the bang is the user saying which. It copies lines rather than
 diffgetting for the same reason `:Dg` does.
 
+**`:wq` ends a merge from either half.** `open_diff` installs a buffer-local
+`<expr>` `cnoreabbrev` for `wq` in both buffers, guarded to a `:` line that is
+exactly `wq`, which expands to a buffer-local `:MentorWq` →
+`session.finish_merge(from_revision)`. From the revision that is `take(false,
+true)`, i.e. accept with the write forced, because `:wq` asks for a write
+whatever `accept_write` says. From the brief it saves the brief as it stands and
+drops the revision, and `revision_notes` is cleared rather than retired, because
+whatever was not taken went with the revision. Either way the brief's diff window
+closes too: that is the `q`. A stock `:wq` in the revision would write
+`MENTOR.md.new`, and that is the reason the abbreviation exists. It is torn down
+with the diff. The expansion only happens on real typing, so `brief_spec` checks
+that it is registered and calls `finish_merge` directly. The keystroke path was
+driven over `--headless --listen` + `--remote-send`, and that is how to check it
+again. Use a short socket path: the scratchpad path is past the unix-socket
+limit.
+
 `close_revision` runs the diff teardown itself instead of relying on the
 `BufWinLeave` that closing the window fires. Autocmds do not nest by default, so
 anything calling it from inside one — the specs run inside `VimEnter` — would

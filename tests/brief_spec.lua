@@ -534,6 +534,67 @@ h.eq("...holding the revision", vim.api.nvim_buf_get_lines(buf_named(brief_path)
 vim.api.nvim_buf_call(buf_named(brief_path), function() vim.cmd("edit!") end)
 require("mentor").setup({})
 
+------------------------------------------------------------------- :wq ends it
+
+local function has_wq(b)
+  return vim.api.nvim_buf_call(b, function()
+    return vim.fn.maparg("wq", "c", true, true).buffer == 1
+      and vim.api.nvim_buf_get_commands(b, {}).MentorWq ~= nil
+  end)
+end
+
+-- From the revision: a stock `:wq` would write MENTOR.md.new, so here it means
+-- "keep this" — :MentorAccept, then both windows go.
+vim.fn.writefile({ "# Cart", "", "before :wq" }, brief_path)
+vim.api.nvim_buf_call(buf_named(brief_path), function() vim.cmd("edit!") end)
+get = h.stub_provider()
+session.revise()
+settle()
+rev_buf = buf_named(rev_path)
+local half = brief.diff_of(rev_buf)
+h.check("the diff knows its other half", half ~= nil)
+h.check(":wq is taken over in the revision", has_wq(rev_buf))
+h.check("...and in the brief", has_wq(half.buf))
+
+local rev_win = vim.fn.win_findbuf(rev_buf)[1]
+h.eq(":wq from the revision finishes", session.finish_merge(true), true)
+h.eq("...with the revision in the brief, on disk", disk(brief_path), "ok")
+h.eq("...and no .new", vim.fn.filereadable(rev_path), 0)
+h.check("...the revision window closed", not vim.api.nvim_win_is_valid(rev_win))
+h.check("...and the brief's diff window too", not vim.api.nvim_win_is_valid(half.win))
+h.check("...taking :wq back out of the brief", not has_wq(half.buf))
+
+-- From the brief: keep what you took with `do`, drop the rest.
+get = h.stub_provider()
+session.revise()
+settle()
+rev_buf = buf_named(rev_path)
+half = brief.diff_of(rev_buf)
+vim.api.nvim_buf_set_lines(half.buf, 0, -1, false, { "# Cart", "", "one hunk taken" })
+h.eq(":wq from the brief finishes", session.finish_merge(false), true)
+h.eq("...saving the brief as merged", disk(brief_path), "# Cart\n\none hunk taken")
+h.check("...dropping the revision", buf_named(rev_path) == nil)
+h.eq("...without a .new", vim.fn.filereadable(rev_path), 0)
+h.check("...and closing the brief's diff window", not vim.api.nvim_win_is_valid(half.win))
+
+-- `:wq` is a request to write, so it writes even with accept's save turned off.
+require("mentor").setup({ context = { project_brief_accept_write = false } })
+get = h.stub_provider()
+session.revise()
+settle()
+h.eq(":wq from the revision with accept_write=false", session.finish_merge(true), true)
+h.eq("...still writes", disk(brief_path), "ok")
+
+require("mentor").setup({ context = { project_brief_wq = false } })
+get = h.stub_provider()
+session.revise()
+settle()
+rev_buf = buf_named(rev_path)
+h.check("project_brief_wq=false leaves :wq alone", not has_wq(rev_buf))
+h.check("...in the brief too", not has_wq(brief.diff_of(rev_buf).buf))
+brief.close_revision(rev_buf)
+require("mentor").setup({})
+
 h.check(":MentorAccept exists", vim.fn.exists(":MentorAccept") == 2)
 h.check("/accept is a panel command", vim.tbl_contains(
   vim.tbl_map(function(i) return i.word end, session.commands()), "/accept"))

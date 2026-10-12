@@ -18,6 +18,10 @@ local M = {}
 ---@type table<integer, fun()>
 local teardowns = {}
 
+--- Per revision buffer, the other half of its diff.
+---@type table<integer, { win: integer, buf: integer }>
+local diffs = {}
+
 --- The brief file at the repo root, if there is one.
 ---
 --- Deliberately ignores `project_brief`: reading may be switched off, but
@@ -255,6 +259,43 @@ local function install_take_all(buf, name, from, to)
   end)
 end
 
+--- `:wq` in a half of the diff ends the merge instead of doing what it would.
+---
+--- In the revision, a stock `:wq` writes `MENTOR.md.new` — the one file this
+--- whole flow exists to never create. In the brief it saves the brief and
+--- leaves the revision behind, modified, waiting for a `:q!`. Both are the
+--- habit fighting the design, so the habit gets its meaning: finish.
+---
+--- An `<expr>` abbreviation, guarded to a `:` line that is exactly `wq`, so a
+--- search for "wq" or `:wq other.txt` are left alone. It expands to a
+--- buffer-local command rather than calling the session directly, so the
+--- expansion is visible in history and `:MentorWq` can be typed by hand.
+---@param buf integer
+---@param from_revision boolean
+local function install_wq(buf, from_revision)
+  vim.api.nvim_buf_create_user_command(buf, "MentorWq", function()
+    require("mentor.session").finish_merge(from_revision)
+  end, { desc = from_revision
+    and "Mentor: take the whole revision, save the brief, close both"
+    or "Mentor: save the brief as merged, close both" })
+
+  vim.api.nvim_buf_call(buf, function()
+    pcall(vim.cmd, [[cnoreabbrev <buffer> <expr> wq ]]
+      .. [[(getcmdtype() ==# ':' && getcmdline() ==# 'wq') ? 'MentorWq' : 'wq']])
+  end)
+end
+
+---@param buf integer
+local function remove_wq(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  pcall(vim.api.nvim_buf_del_user_command, buf, "MentorWq")
+  vim.api.nvim_buf_call(buf, function()
+    pcall(vim.cmd, "cunabbrev <buffer> wq")
+  end)
+end
+
 ---@param buf integer
 ---@param name string
 local function remove_take_all(buf, name)
@@ -277,8 +318,9 @@ end
 ---@param win integer the revision's window
 ---@param target_path string the brief being revised
 ---@param cmd string|nil name for the take-everything command, nil for none
+---@param wq boolean|nil make `:wq` end the merge in both halves
 ---@return boolean diffing
-function M.open_diff(win, target_path, cmd)
+function M.open_diff(win, target_path, cmd, wq)
   if not (win and vim.api.nvim_win_is_valid(win)) then
     return false
   end
@@ -303,9 +345,20 @@ function M.open_diff(win, target_path, cmd)
     install_take_all(target_buf, cmd, buf, target_buf)
   end
 
+  if wq then
+    install_wq(buf, true)
+    install_wq(target_buf, false)
+  end
+  diffs[buf] = { win = target_win, buf = target_buf }
+
   local group = vim.api.nvim_create_augroup("mentor_diff_" .. buf, { clear = true })
   local function teardown()
     teardowns[buf] = nil
+    diffs[buf] = nil
+    if wq then
+      remove_wq(buf)
+      remove_wq(target_buf)
+    end
     if vim.api.nvim_win_is_valid(target_win) then
       vim.api.nvim_win_call(target_win, function()
         vim.cmd("diffoff")
@@ -325,6 +378,13 @@ function M.open_diff(win, target_path, cmd)
   })
 
   return true
+end
+
+--- The brief's half of a revision's diff, while the diff is open.
+---@param buf integer the revision
+---@return { win: integer, buf: integer }|nil
+function M.diff_of(buf)
+  return diffs[buf]
 end
 
 --- Close a revision for good: end its diff, close its windows, drop the buffer.

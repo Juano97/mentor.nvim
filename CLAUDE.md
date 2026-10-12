@@ -145,6 +145,36 @@ nvim driven over `--listen`, so the real layout can be checked there. In
 `ui_spec` it still cannot fire, because the spec runs inside `VimEnter`, so the
 spec makes the layout change itself and calls `sync_input_height`.
 
+**The border above the input box is drawn as a handle.** It can be dragged,
+and a plain separator gives no hint of that. Which line it is depends on
+`laststatus`. With 3 it is the separator under the transcript, so the
+transcript gets a window-local `fillchars` `horiz:━` and
+`winhighlight=WinSeparator:MentorGrip`. Its `vertright`/`vertleft` are `━`
+too: the corner where it meets the code window's border is drawn from the
+transcript's fillchars, and the default `├` came out as a thin tick in the grip
+colour on a dark border, with a gap before the line. Otherwise it is the transcript's own
+statusline, which is `%!…grip_statusline()`: a `━━ ⋯ ━━` row. That function
+hands back the *global* format when `laststatus` is 3, because the transcript's
+local statusline is what the global one shows while the cursor is in it. It also
+does so when `g:statusline_winid` is not the transcript.
+
+That second check, plus `strip_grip` on `WinNew`, exists because `:split` copies
+window-local options. A Snacks terminal opened with the cursor in the chat
+arrived wearing the grip. `ui.open` strips both panel windows before dressing
+them for the same reason: they too are split from a window that may have
+inherited it. lualine with `globalstatus` writes its rendered line into every
+window's local statusline, the transcript's included. Under `laststatus=3` that
+costs nothing, since the border is the separator. The rendering is checkable
+headless: `redraw!`, then `screenstring()`/`screenattr()` read the grid, which
+is what `ui_spec` does. Mouse dragging is not: `nvim_input_mouse` does nothing
+without a UI attached.
+
+A real `row-resize` pointer is possible on Konsole, kitty, foot and Ghostty via
+OSC 22, but only from nvim 0.12 (`nvim_ui_send`), with `mousemoveevent` on and,
+inside tmux, `allow-passthrough on`. It was left out on purpose. If it is ever
+added, it goes behind a config key that is off by default, and this drawn handle
+stays.
+
 **The scroll clamp has to run a tick late.** `WinScrolled` on the transcript
 window pulls the view back so the last line stays on the bottom row. Correcting
 inside the callback works for `<C-e>` and silently does nothing for `<C-f>`,

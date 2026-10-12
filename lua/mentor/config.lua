@@ -14,6 +14,10 @@ M.defaults = {
     -- other windows open and close; resize it by hand and it holds that one
     -- instead, until you restart.
     input_height = 5,
+    -- Draw the border between the transcript and the input box as a handle
+    -- (━━ ⋯ ━━, highlight MentorGrip), since it can be dragged to resize the
+    -- box. Set false for a plain border.
+    grip = true,
     -- Toggling the panel open puts the cursor in the input box and starts
     -- insert. Set false to have :Mentor only reveal the panel.
     focus_on_open = true,

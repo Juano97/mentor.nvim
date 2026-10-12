@@ -134,6 +134,95 @@ ui.close()
 ui.open(cfg.window)
 h.eq("with nothing remembered it is input_height again", box(), want)
 
+------------------------------------------------------------------- the grip
+
+-- The border between transcript and input box can be dragged, so it is drawn
+-- as a handle. Read off the screen, not the options: what matters is what is
+-- drawn, and `redraw!` puts it on the grid even headless.
+local function border_row()
+  vim.cmd("redraw!")
+  local pos = vim.fn.win_screenpos(ui.state.win)
+  local r = pos[1] + vim.api.nvim_win_get_height(ui.state.win)
+  local cells = {}
+  for c = pos[2], pos[2] + vim.api.nvim_win_get_width(ui.state.win) - 1 do
+    cells[#cells + 1] = vim.fn.screenstring(r, c)
+  end
+  return table.concat(cells), vim.fn.screenattr(r, pos[2])
+end
+
+local saved_ls = vim.o.laststatus
+local saved_fcs = vim.go.fillchars
+vim.go.fillchars = "eob:~"
+ui.close()
+ui.open(cfg.window)
+
+h.check("MentorGrip is defined", next(vim.api.nvim_get_hl(0, { name = "MentorGrip" })) ~= nil)
+h.check("...as a default, so it can be restyled",
+  vim.api.nvim_get_hl(0, { name = "MentorGrip" }).default == true)
+h.eq("...and comes back after :colorscheme", #vim.api.nvim_get_autocmds(
+  { group = "mentor_panel", event = "ColorScheme" }), 1)
+h.check("the user's other fill characters survive",
+  vim.wo[ui.state.win].fillchars:find("eob:~", 1, true) ~= nil, vim.wo[ui.state.win].fillchars)
+
+-- A global statusline: the border is the separator under the transcript.
+vim.o.laststatus = 3
+local drawn, attr = border_row()
+h.eq("with laststatus=3 the border is a heavy line", drawn,
+  ("━"):rep(vim.api.nvim_win_get_width(ui.state.win)))
+h.check("...in its own colour", attr ~= vim.fn.screenattr(1, 1))
+-- The corner it shares with the code window's border. Left to the default
+-- `├`, it was a thin tick in the grip colour on a dark border, then a gap.
+local corner = vim.fn.win_screenpos(ui.state.win)
+corner = { corner[1] + vim.api.nvim_win_get_height(ui.state.win), corner[2] - 1 }
+h.eq("...running flush into the border beside it",
+  vim.fn.screenstring(corner[1], corner[2]), "━")
+-- Under a global statusline, the transcript's own statusline is what the
+-- global one shows while the cursor is in it; a row of handles there would
+-- replace the user's.
+vim.go.statusline = "%f the user's"
+h.eq("...and the global statusline is left alone", ui.grip_statusline(), "%f the user's")
+vim.go.statusline = "%!MyLine()"
+h.eq("...even when it is an expression", ui.grip_statusline(), "%{%MyLine()%}")
+vim.go.statusline = ""
+
+-- Per-window statuslines: the border is the transcript's statusline.
+vim.o.laststatus = 2
+drawn = border_row()
+h.check("with laststatus=2 the border is the grip", drawn:find("━ ⋯ ━", 1, true) ~= nil, drawn)
+h.eq("...across the whole width", vim.fn.strdisplaywidth(drawn),
+  vim.api.nvim_win_get_width(ui.state.win))
+
+-- A window split off the transcript copies its options, grip and all.
+vim.api.nvim_set_current_win(ui.state.win)
+vim.cmd("split")
+local stray = vim.api.nvim_get_current_win()
+h.eq("a split off the panel inherits the grip (vim does that)",
+  vim.wo[stray].statusline, vim.wo[ui.state.win].statusline)
+vim.g.statusline_winid = stray
+h.check("...but the grip statusline is the transcript's alone",
+  ui.grip_statusline():find("⋯", 1, true) == nil)
+vim.g.statusline_winid = nil
+ui.strip_grip(stray)
+-- Cleared, so it reads back as the global value, not as "".
+h.check("stripping it clears the statusline",
+  vim.wo[stray].statusline:find("grip_statusline", 1, true) == nil, vim.wo[stray].statusline)
+h.check("...the border", vim.wo[stray].fillchars:find("━", 1, true) == nil)
+h.check("...and the colour", vim.wo[stray].winhighlight:find("MentorGrip", 1, true) == nil)
+h.eq("WinNew strips it as it happens", #vim.api.nvim_get_autocmds(
+  { group = "mentor_panel", event = "WinNew" }), 1)
+vim.api.nvim_win_close(stray, true)
+
+ui.close()
+ui.open(vim.tbl_extend("force", cfg.window, { grip = false }))
+h.check("grip=false leaves the border alone",
+  vim.wo[ui.state.win].winhighlight:find("MentorGrip", 1, true) == nil)
+h.check("...and its statusline", vim.wo[ui.state.win].statusline:find("grip", 1, true) == nil)
+
+vim.o.laststatus = saved_ls
+vim.go.fillchars = saved_fcs
+ui.close()
+ui.open(cfg.window)
+
 ------------------------------------------------------------------ selection
 
 local visual = vim.tbl_filter(function(m)

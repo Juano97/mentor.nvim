@@ -171,6 +171,101 @@ function M.keep_input_height(height)
   end
 end
 
+--- The border between the transcript and the input box, drawn as a handle.
+---
+--- That border can be dragged to resize the box, and nothing about a plain
+--- separator says so. Which line it is depends on 'laststatus': with a global
+--- statusline (3) it is the separator under the transcript, drawn with
+--- `fillchars.horiz` and `WinSeparator`; otherwise it is the transcript's own
+--- statusline. Both are dressed, window-locally, so the same panel reads the
+--- same way under either setting and nothing outside it changes.
+local GRIP = "━"
+local GRIP_STL = "%!v:lua.require'mentor.ui'.grip_statusline()"
+local GRIP_WHL = "WinSeparator:MentorGrip"
+
+local function define_grip_hl()
+  -- `default`, so a colorscheme or the user can restyle it.
+  vim.api.nvim_set_hl(0, "MentorGrip", { link = "Special", default = true })
+end
+
+--- The transcript's statusline: the grip, unless that line is the global one.
+---
+--- Set as `%!` so it is decided per redraw. With 'laststatus' 3 the window's
+--- own statusline is what the *global* one shows while the cursor is in the
+--- transcript, and a row of handles there would replace the user's statusline,
+--- so that case hands back the global format instead. A `%!` there would not
+--- be re-evaluated inside this one, so it is rewrapped as `%{%...%}`.
+---@return string
+function M.grip_statusline()
+  -- A window split off the panel copies this option along with the rest; the
+  -- grip belongs to the transcript only.
+  local drawing = vim.g.statusline_winid
+  if vim.o.laststatus == 3 or (drawing and drawing ~= M.state.win) then
+    local global = vim.go.statusline
+    if global:sub(1, 2) == "%!" then
+      return "%{%" .. global:sub(3) .. "%}"
+    end
+    return global
+  end
+  local width = valid_win(M.state.win) and vim.api.nvim_win_get_width(M.state.win) or 0
+  local left = math.max(0, math.floor((width - 3) / 2))
+  local right = math.max(0, width - 3 - left)
+  return "%#MentorGrip#" .. GRIP:rep(left) .. " ⋯ " .. GRIP:rep(right)
+end
+
+---@param win integer
+local function dress_grip(win)
+  -- The effective value, so the user's other fill characters survive; only
+  -- the ones below are ours. `stl` is left alone: under a global statusline it
+  -- would fill the user's statusline whenever the cursor is in the panel.
+  --
+  -- The corner where the line meets the code window's border comes from this
+  -- window's `vertright` (`vertleft` with the panel on the left). Left at its
+  -- default it is a thin `├` in the grip colour on a dark border: a stray
+  -- tick, then a gap before the line starts. The grip itself runs the line
+  -- flush into the border instead.
+  local ours = { "horiz", "vertright", "vertleft" }
+  local kept = {}
+  local current = vim.wo[win].fillchars
+  if current == "" then
+    current = vim.go.fillchars -- no local value of its own yet
+  end
+  for item in current:gmatch("[^,]+") do
+    if not vim.tbl_contains(ours, item:match("^[^:]+")) then
+      kept[#kept + 1] = item
+    end
+  end
+  for _, name in ipairs(ours) do
+    kept[#kept + 1] = name .. ":" .. GRIP
+  end
+  vim.wo[win].fillchars = table.concat(kept, ",")
+  vim.wo[win].statusline = GRIP_STL
+end
+
+--- Take the grip off a window that only has it by inheritance.
+---
+--- `:split` copies window-local options into the new window, so anything
+--- opened from inside the panel — a terminal, a `:split` of your own — would
+--- arrive wearing the transcript's border, and a window that is not the panel
+--- has no business with it. Only our own values are removed.
+---@param win integer
+function M.strip_grip(win)
+  if not valid_win(win) then
+    return
+  end
+  local wo = vim.wo[win]
+  if wo.statusline == GRIP_STL then
+    wo.statusline = ""
+  end
+  if wo.fillchars:find("horiz:" .. GRIP, 1, true) then
+    wo.fillchars = ""
+  end
+  local whl = vim.tbl_filter(function(item)
+    return item ~= GRIP_WHL
+  end, vim.split(wo.winhighlight, ",", { trimempty = true }))
+  wo.winhighlight = table.concat(whl, ",")
+end
+
 --- The ordinary windows in this tab, as a string that changes exactly when
 --- one opens or closes.
 ---@return string
@@ -436,10 +531,41 @@ function M.open(cfg)
   vim.wo[win].cursorline = false
   vim.wo[iwin].winfixheight = true
 
+  -- The panel's own windows were split from yours too, and may have come
+  -- with a grip inherited from an earlier panel: start them clean.
+  M.strip_grip(win)
+  M.strip_grip(iwin)
+  if cfg.grip ~= false then
+    define_grip_hl()
+    dress_grip(win)
+    -- Both windows, though only the transcript has a border under it: with the
+    -- panel on the left, the vertical border beside it belongs to these two,
+    -- and half of it coloured would look like a mistake.
+    for _, w in ipairs({ win, iwin }) do
+      local whl = vim.wo[w].winhighlight
+      vim.wo[w].winhighlight = (whl ~= "" and whl .. "," or "") .. GRIP_WHL
+    end
+  end
+
   M.state.win = win
   M.state.input_win = iwin
 
   local group = vim.api.nvim_create_augroup("mentor_panel", { clear = true })
+
+  -- `:colorscheme` clears every group it does not define, MentorGrip included.
+  if cfg.grip ~= false then
+    vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = define_grip_hl })
+    -- WinNew runs in the new window, which is the one that may have inherited.
+    vim.api.nvim_create_autocmd("WinNew", {
+      group = group,
+      callback = function()
+        local new = vim.api.nvim_get_current_win()
+        if new ~= M.state.win and new ~= M.state.input_win then
+          M.strip_grip(new)
+        end
+      end,
+    })
+  end
 
   -- Every resize, not only ones that name a panel window: the box is resized
   -- as a side effect of some other window opening or closing. Scheduled for

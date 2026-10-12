@@ -86,6 +86,15 @@ The input box's winbar is the status line: `ask — <CR> send` when idle, a
 spinner and `thinking… :MentorStop` while a reply streams, plus `[cart.py:4-9]`
 when a selection is attached.
 
+The line between the transcript and the box is a handle. Drag it to make the box
+taller or shorter. It is drawn heavier than other borders and in its own colour
+(highlight `MentorGrip`, linked to `Special`); with a per-window statusline
+(`laststatus` other than 3) it carries a `⋯` grip in the middle. A height you set
+by dragging, or with `:resize`, holds for the session, even when terminals and
+splits open and close around it. A statusline plugin that writes every window's
+statusline (lualine without `globalstatus`) replaces the `⋯` line with its own.
+Set `window = { grip = false }` for a plain border.
+
 The box takes commands as well as questions, so the usual ones do not cost you a
 trip to `:`. Typing `/` at the start of an empty line pops up the list — `<C-n>`
 and `<C-p>` walk it, `<C-y>` takes one — or type `/help` to have it written into
